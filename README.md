@@ -93,9 +93,10 @@ PUSHPLUS_CHANNEL=wechat
 ```
 
 - 发到微信：`PUSHPLUS_CHANNEL=wechat`
-- 发到 QQ：`PUSHPLUS_CHANNEL=qq`，并用 `PUSHPLUS_TO` 填写好友 QQ 号或群号
-- 发到 QQ 群：还必须填写 `PUSHPLUS_OPTION`（PushPlus 的渠道配置编码）
-- 使用 PushPlus 群组功能时填写 `PUSHPLUS_TOPIC`
+- QQ 默认机器人发给自己：只填 `PUSHPLUS_CHANNEL=qq`，`PUSHPLUS_OPTION` 留空
+- QQ 群或指定机器人：填写 `PUSHPLUS_OPTION`（PushPlus 的渠道配置编码），并让 `PUSHPLUS_TOPIC`、`PUSHPLUS_TO` 保持为空
+- 好友消息使用 `PUSHPLUS_TO` 填好友令牌；它不是 QQ 号
+- 使用 PushPlus 一对多群组功能时填写 `PUSHPLUS_TOPIC`
 
 `.env` 已被 Git 忽略，真实 Token 不会进入仓库。
 

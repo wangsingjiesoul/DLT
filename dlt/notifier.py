@@ -71,6 +71,8 @@ class PushPlusNotifier:
         self.topic = topic.strip() if topic else None
         self.recipient = recipient.strip() if recipient else None
         self.option = option.strip() if option else None
+        if self.channel == "qq" and self.option and (self.topic or self.recipient):
+            raise NotificationConfigError("QQ 群/指定机器人配置不能与 PUSHPLUS_TOPIC 或 PUSHPLUS_TO 同时使用")
         self._opener = opener
         self.timeout = timeout
 

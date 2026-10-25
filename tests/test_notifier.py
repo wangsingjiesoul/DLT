@@ -48,7 +48,6 @@ class NotifierTests(unittest.TestCase):
         notifier = PushPlusNotifier(
             token="test-token",
             channel="qq",
-            recipient="123456",
             option="qq-config-code",
             opener=opener,
         )
@@ -56,9 +55,18 @@ class NotifierTests(unittest.TestCase):
         self.assertEqual(response["code"], 200)
         self.assertEqual(captured["payload"]["token"], "test-token")
         self.assertEqual(captured["payload"]["channel"], "qq")
-        self.assertEqual(captured["payload"]["to"], "123456")
+        self.assertNotIn("to", captured["payload"])
         self.assertEqual(captured["payload"]["option"], "qq-config-code")
         self.assertNotIn("test-token", format_prediction_markdown(PREDICTION))
+
+    def test_qq_group_option_rejects_friend_or_topic_target(self):
+        with self.assertRaises(NotificationConfigError):
+            PushPlusNotifier(
+                token="test-token",
+                channel="qq",
+                recipient="friend-token",
+                option="qq-group-code",
+            )
 
 
 if __name__ == "__main__":
