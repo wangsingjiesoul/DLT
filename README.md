@@ -4,7 +4,7 @@
 
 - 2007 年至今的历史开奖号码；
 - 增量获取最新开奖结果；
-- 均衡、趋势、探索三类统计候选；
+- 均衡、趋势、探索三类统计候选，并用历史经验分布校准组合结构；
 - 通过 OpenAI-compatible 接口调用真实 AI 模型，对合法候选池进行受控重排；
 - 响应式网页和只读 JSON API；
 - 默认通过免费的 Qmsg酱向 QQ 发送候选号码；
@@ -56,14 +56,20 @@ python main.py run-once --notify
 # 强制重复发送当前目标期号
 python main.py run-once --notify --force-notify
 
-# 严格按时间顺序比较模型与随机基线
-python main.py backtest --rounds 30 --candidates 250
+# 严格按时间顺序比较模型与多次随机基线，并输出 95% 置信区间
+python main.py backtest --rounds 200 --candidates 250 --baseline-repeats 50
 
 # 运行测试
 python -m unittest discover -s tests -v
 
 # 配置 AI 后，真实调用一次模型进行安全检查；不会发送通知
 python main.py ai-check
+
+# 不联网、不发消息地检查数据、运行目录、AI、通知和时区配置
+python main.py doctor
+
+# 部署前要求 AI 严格模式和至少一个通知渠道都已配置
+python main.py doctor --deployment
 ```
 
 ## 接入真实 AI 模型
@@ -71,7 +77,7 @@ python main.py ai-check
 项目支持 OpenAI `chat/completions` 形式的兼容接口。模型不会直接生成号码，完整流程是：
 
 ```text
-历史开奖 → 本地统计特征 → 每种策略的合法候选池
+历史开奖 → 30/100/300 期统计 + 最多 1,000 期结构分布 → 合法候选池
          → 外部 AI 只选择候选 ID → 本地二次校验 → 三组最终候选
 ```
 
@@ -88,7 +94,7 @@ AI_TIMEOUT=30
 
 - `AI_REQUIRED=true`：AI 请求、JSON 解析或候选校验失败时，本次预测直接失败，定时任务不会发送号码。
 - `AI_REQUIRED=false`：失败时回退为原统计排序，网页、API 和消息中会明确标记“已回退”。
-- 不要把 API Key 发到聊天、写进源码或提交到 Git；`.env` 和 Docker 构建上下文都已排除真实密钥。
+- 不要把 API Key 发到聊天、写进源码或提交到 Git；只填写在项目根目录 `.env` 的 `AI_API_KEY=` 后面。`.env` 和 Docker 构建上下文都已排除真实密钥。
 - Base URL 填到兼容 API 的版本根路径即可，例如末尾为 `/v1`；程序会自动追加 `/chat/completions`。
 
 验证是否真的调用了 AI，并确认返回值能通过候选 ID 校验：
@@ -110,7 +116,9 @@ python main.py ai-check
 
 这个命令不更新开奖数据、不保存预测，也不发送 QQ/微信消息；它会强制使用严格模式，任何统计回退都会被判定为检查失败。
 
-`predict`、`notify`、`run-once`、定时任务和 Web 首次生成预测时都会使用同一套 AI 配置。`backtest` 默认只测试确定性的统计层，避免产生大量 API 费用和不可复现结果。
+`predict`、`notify`、`run-once`、定时任务和 Web 首次生成预测时都会使用同一套 AI 配置。AI 收到的是历史数据压缩后的统计摘要和候选，不是几千期原始 JSON。`backtest` 只测试确定性的统计层，避免产生大量 API 费用和不可复现结果。
+
+`backtest` 会为每个历史目标期只使用更早的数据，并对同一期重复生成随机基线。输出中的 95% 置信区间如果跨过 0，会明确标记为 `inconclusive`，不能因为平均数略高就宣称模型有效。最近一次结果同时保存到 `runtime/latest_backtest.json`。
 
 Web 会把同一期、同一模型配置的结果缓存到 `runtime/latest_prediction.json`。多个并发页面请求只会触发一次生成；如果非严格模式发生统计回退，网页会在 10 分钟冷却期后自动重新尝试 AI，避免每次刷新都重复消耗接口额度。
 
@@ -186,7 +194,16 @@ docker compose up -d --build
 docker compose logs -f dlt
 ```
 
-网页端口由 `.env` 中的 `DLT_PORT` 决定；默认地址为 `http://服务器IP:8000`。
+首次启动前建议先在项目目录执行：
+
+```bash
+python main.py doctor --deployment
+python main.py ai-check
+```
+
+第一个命令不联网也不发消息；第二个命令会真实调用一次 AI，但不会发送通知。
+
+网页端口由 `.env` 中的 `DLT_PORT` 决定；地址为 `http://服务器IP:你填写的端口`。
 
 定时任务默认开启，因此 Docker 部署必须配置所选渠道的凭证；默认是 `QMSG_KEY`。如果只想看网页、不发送消息，可在本地使用 `python main.py serve --no-scheduler`。
 
@@ -212,9 +229,10 @@ DLT_SCHEDULE_RETRY_MINUTES=10
 
 - `GET /api/health`：服务和数据状态
 - `GET /api/prediction`：当前候选结果
+- `GET /api/history?page=1&page_size=30`：分页读取全部历史，`page_size` 为 1～100
 - `GET /api/history/latest?limit=10`：最近开奖记录，最多 100 条
 
-Web 服务不提供远程更新或发送接口，避免公网部署后被他人滥用。更新和通知只能通过定时任务或服务器上的 CLI 触发。
+网页首页同时展示当前预测、模型方法说明和全部历史开奖。历史区默认每页 30 期，可切换 20/30/50/100；翻页只请求历史接口，不会再次调用 AI。Web 服务不提供远程更新或发送接口，避免公网部署后被他人滥用。更新和通知只能通过定时任务或服务器上的 CLI 触发。
 
 ## 目录结构
 
@@ -231,6 +249,7 @@ docs/       架构、ADR 和实施计划
 
 - `dlt/data.py`：读取、校验和安全写入开奖 JSON。
 - `dlt/predictor.py`：统计特征、候选池、AI 选择约束和最终评分。
+- `dlt/backtest.py`：无未来数据泄漏的滚动回测、重复随机基线和置信区间。
 - `dlt/ai.py`：OpenAI-compatible 请求、超时、响应限制和 JSON 解析。
 - `dlt/automation.py`：更新、预测、保存、通知去重和失败重试。
 - `main.py`：环境变量、命令行、定时器和各模块装配。

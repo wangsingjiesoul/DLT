@@ -52,10 +52,29 @@ function aiStatusText(ai) {
 }
 
 function defaultStrategyNote(item, index) {
-  if (item.selection_reason) return `AI：${item.selection_reason}`;
+  const rank = item.candidate_rank ? `候选池第 ${item.candidate_rank} 名` : "本地候选";
+  if (item.selection_reason) return `${rank} · AI：${item.selection_reason}`;
   if (index === 0) return "冷热混合 · 三区覆盖";
   if (index === 1) return "近期频率 · 重复惩罚";
   return "遗漏因子 · 多样化";
+}
+
+function renderMethodology(data) {
+  const method = data.methodology || {};
+  const root = document.getElementById("methodList");
+  root.replaceChildren();
+  const rows = [
+    `历史样本：${Number(method.history_used || data.history_count).toLocaleString("zh-CN")} 期`,
+    `统计窗口：${(method.frequency_windows || []).join(" / ") || "未提供"} 期`,
+    `结构校准：最近 ${Number(method.structure_sample_size || 0).toLocaleString("zh-CN")} 期经验分布`,
+    method.ai_role || "AI 未参与候选选择",
+    method.scientific_limit || data.risk_notice,
+  ];
+  rows.forEach((value) => {
+    const item = document.createElement("li");
+    item.textContent = value;
+    root.append(item);
+  });
 }
 
 function renderPrediction(data) {
@@ -68,6 +87,7 @@ function renderPrediction(data) {
   text("hotFront", data.signals.hot_front_30.join(" · "));
   text("frontGap", `${data.signals.front_largest_gap.number} / ${data.signals.front_largest_gap.periods}期`);
   text("backGap", `${data.signals.back_largest_gap.number} / ${data.signals.back_largest_gap.periods}期`);
+  renderMethodology(data);
 
   const root = document.getElementById("recommendations");
   root.replaceChildren();
@@ -126,6 +146,137 @@ function showError(error) {
   root.append(message);
 }
 
+// 历史开奖和预测使用两个独立请求。用户翻页时不会再次调用可能产生费用的 AI。
+const historyState = {
+  page: 1,
+  pageSize: 30,
+  totalPages: 1,
+  controller: null,
+};
+
+function historyBall(number, area) {
+  const node = document.createElement("span");
+  node.className = `history-ball ${area}`;
+  node.textContent = number;
+  return node;
+}
+
+function renderHistoryRows(items) {
+  const root = document.getElementById("historyRows");
+  root.replaceChildren();
+  if (!items.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "history-message";
+    cell.textContent = "这一页没有开奖记录。";
+    row.append(cell);
+    root.append(row);
+    return;
+  }
+
+  items.forEach((draw) => {
+    const row = document.createElement("tr");
+    const issue = document.createElement("td");
+    issue.className = "history-issue";
+    issue.textContent = draw.issue;
+    const date = document.createElement("td");
+    date.className = "history-date";
+    date.textContent = draw.date;
+    const front = document.createElement("td");
+    const frontBalls = document.createElement("div");
+    frontBalls.className = "history-balls";
+    draw.front.forEach((number) => frontBalls.append(historyBall(number, "front")));
+    front.append(frontBalls);
+    const back = document.createElement("td");
+    const backBalls = document.createElement("div");
+    backBalls.className = "history-balls";
+    draw.back.forEach((number) => backBalls.append(historyBall(number, "back")));
+    back.append(backBalls);
+    row.append(issue, date, front, back);
+    root.append(row);
+  });
+}
+
+function setHistoryLoading(loading) {
+  document.getElementById("historyTableWrap").setAttribute("aria-busy", String(loading));
+  document.getElementById("historyPrevious").disabled = loading || historyState.page <= 1;
+  document.getElementById("historyNext").disabled = loading || historyState.page >= historyState.totalPages;
+  document.getElementById("historyPageSize").disabled = loading;
+}
+
+function updateHistoryControls(data) {
+  historyState.page = data.page;
+  historyState.pageSize = data.page_size;
+  historyState.totalPages = data.total_pages;
+  text("historyTotal", `共 ${Number(data.total).toLocaleString("zh-CN")} 期`);
+  text("historyPageMeta", `第 ${data.page} / ${data.total_pages} 页`);
+  const input = document.getElementById("historyPageInput");
+  input.value = String(data.page);
+  input.max = String(data.total_pages);
+}
+
+async function loadHistory(page = historyState.page) {
+  // 快速连续翻页时取消旧请求，避免较慢的旧响应覆盖新页面。
+  if (historyState.controller) historyState.controller.abort();
+  const controller = new AbortController();
+  historyState.controller = controller;
+  historyState.page = page;
+  setHistoryLoading(true);
+  text("historyStatus", "正在加载…");
+  try {
+    const query = new URLSearchParams({ page: String(page), page_size: String(historyState.pageSize) });
+    const response = await fetch(`/api/history?${query}`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    // 数据量发生变化后，旧页码可能越界；自动回到新的最后一页。
+    if (data.page > data.total_pages) {
+      await loadHistory(data.total_pages);
+      return;
+    }
+    updateHistoryControls(data);
+    renderHistoryRows(data.items);
+    text("historyStatus", `已显示第 ${data.page} 页`);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    const root = document.getElementById("historyRows");
+    root.replaceChildren();
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "history-message error-text";
+    cell.textContent = `读取历史开奖失败：${error.message}`;
+    row.append(cell);
+    root.append(row);
+    text("historyStatus", "加载失败，请稍后重试");
+  } finally {
+    if (historyState.controller === controller) setHistoryLoading(false);
+  }
+}
+
+document.getElementById("historyPrevious").addEventListener("click", () => {
+  if (historyState.page > 1) loadHistory(historyState.page - 1);
+});
+
+document.getElementById("historyNext").addEventListener("click", () => {
+  if (historyState.page < historyState.totalPages) loadHistory(historyState.page + 1);
+});
+
+document.getElementById("historyPageSize").addEventListener("change", (event) => {
+  historyState.pageSize = Number(event.target.value);
+  loadHistory(1);
+});
+
+document.getElementById("historyJumpForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const requested = Number(document.getElementById("historyPageInput").value);
+  if (!Number.isInteger(requested)) return;
+  loadHistory(Math.max(1, Math.min(historyState.totalPages, requested)));
+});
+
 fetch("/api/prediction", { headers: { Accept: "application/json" } })
   .then((response) => {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -133,3 +284,5 @@ fetch("/api/prediction", { headers: { Accept: "application/json" } })
   })
   .then(renderPrediction)
   .catch(showError);
+
+loadHistory();

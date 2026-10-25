@@ -61,6 +61,9 @@ class PredictorTests(unittest.TestCase):
         second = generate_prediction(self.draws, candidate_count=600)
         self.assertEqual(first, second)
         self.assertEqual(len(first["recommendations"]), 3)
+        self.assertEqual(first["model_version"], "evidence-calibrated-ensemble-v2")
+        self.assertEqual(first["methodology"]["history_used"], len(self.draws))
+        self.assertEqual(first["methodology"]["frequency_windows"], [30, 100, 300])
         self.assertEqual({x["strategy"] for x in first["recommendations"]}, {"balanced", "trend", "explore"})
 
         combos = set()

@@ -66,6 +66,7 @@ class OpenAICompatibleSelector:
         opener: Callable[..., Any] = urlopen,
         max_response_bytes: int = MAX_AI_RESPONSE_BYTES,
     ) -> None:
+        """校验运行时配置并保存连接参数；API Key 永远只保存在实例内存中。"""
         key = api_key.strip()
         model = model.strip()
         if not key or len(key) > 4_096 or "\r" in key or "\n" in key:
@@ -87,9 +88,12 @@ class OpenAICompatibleSelector:
         self.profile_id = f"openai-compatible:{fingerprint}"
 
     def select(self, selection_request: dict[str, Any]) -> dict[str, Any]:
+        """发送候选摘要并返回模型选择；网络与响应异常会被转换为安全错误。"""
         system_prompt = (
             "你是大乐透候选组合重排器。你不能创造、修改或补充号码，只能从用户提供的候选 ID 中选择。"
-            "必须为 balanced、trend、explore 各选择且只选择一个候选，兼顾统计分、结构和三组之间的覆盖差异。"
+            "候选中的频率、遗漏和结构字段已经由历史开奖计算。"
+            "必须为 balanced、trend、explore 各选择且只选择一个候选，兼顾统计分、历史结构常见度和三组覆盖差异。"
+            "不要把热号、冷号、遗漏或 AI 判断描述为概率优势。"
             "只返回 JSON 对象，格式为："
             '{"selections":[{"strategy":"balanced","candidate_id":"...","reason":"不超过80字"},'
             '{"strategy":"trend","candidate_id":"...","reason":"不超过80字"},'
@@ -118,6 +122,7 @@ class OpenAICompatibleSelector:
             method="POST",
         )
         try:
+            # 只读取有限大小的响应，防止异常服务返回超大内容占满内存。
             with self._opener(request, timeout=self.timeout) as response:
                 response_body = response.read(self.max_response_bytes + 1)
         except HTTPError as exc:

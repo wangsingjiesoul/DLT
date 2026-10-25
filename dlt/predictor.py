@@ -7,16 +7,16 @@ import math
 import random
 from collections import Counter
 from datetime import date, timedelta
-from statistics import mean
+from statistics import mean, pstdev
 from typing import Any
 
 from .ai import AISelectionError
 from .data import validate_draws
 
 
-# 统计公式没有变化，因此保留 v1，避免升级 AI 功能后无故改变原统计候选种子。
-MODEL_VERSION = "statistical-ensemble-v1"
-AI_RERANK_VERSION = "candidate-rerank-v1"
+# v2 用真实历史分布校准组合结构，并把更完整的统计摘要交给 AI 审阅。
+MODEL_VERSION = "evidence-calibrated-ensemble-v2"
+AI_RERANK_VERSION = "candidate-rerank-v2"
 AI_CANDIDATES_PER_STRATEGY = 18
 DRAW_WEEKDAYS = {0, 2, 5}  # 周一、周三、周六
 
@@ -107,22 +107,71 @@ def _weighted_sample(rng: random.Random, scores: dict[str, float], count: int) -
     return sorted(result)
 
 
-def _structure_score(front: list[str], back: list[str]) -> float:
-    """评价分区、奇偶、和值、跨度、连号和后区间距等组合形态。"""
+def _structure_values(front: list[str], back: list[str]) -> dict[str, Any]:
+    """把一注号码转换成可与历史开奖比较的组合结构。"""
     front_values = [int(number) for number in front]
     back_values = [int(number) for number in back]
-    zones = [sum(1 <= number <= 12 for number in front_values), sum(13 <= number <= 24 for number in front_values), sum(25 <= number <= 35 for number in front_values)]
-    zone_score = 1.0 if all(zones) else 0.45
-    odd_count = sum(number % 2 for number in front_values)
-    odd_score = 1.0 if odd_count in (2, 3) else 0.65 if odd_count in (1, 4) else 0.2
-    total = sum(front_values)
-    sum_score = max(0.15, 1 - abs(total - 90) / 55)
-    span = max(front_values) - min(front_values)
-    span_score = max(0.2, 1 - abs(span - 25) / 22)
-    consecutive = sum(right - left == 1 for left, right in zip(front_values, front_values[1:]))
-    consecutive_score = 1.0 if consecutive <= 1 else 0.55
-    back_score = 1.0 if abs(back_values[1] - back_values[0]) >= 3 else 0.75
-    return mean((zone_score, odd_score, sum_score, span_score, consecutive_score, back_score))
+    return {
+        "front_sum": sum(front_values),
+        "front_span": max(front_values) - min(front_values),
+        "front_odd_count": sum(number % 2 for number in front_values),
+        "front_zones": (
+            sum(1 <= number <= 12 for number in front_values),
+            sum(13 <= number <= 24 for number in front_values),
+            sum(25 <= number <= 35 for number in front_values),
+        ),
+        "front_consecutive_pairs": sum(
+            right - left == 1 for left, right in zip(front_values, front_values[1:])
+        ),
+        "back_gap": abs(back_values[1] - back_values[0]),
+    }
+
+
+def _structure_profile(draws: list[dict[str, Any]], limit: int = 1_000) -> dict[str, Any]:
+    """从最近历史中学习常见结构，替代写死的和值、跨度和奇偶经验值。"""
+    rows = [_structure_values(draw["front"], draw["back"]) for draw in draws[:limit]]
+    numeric_keys = ("front_sum", "front_span", "back_gap")
+    categorical_keys = ("front_odd_count", "front_zones", "front_consecutive_pairs")
+    return {
+        "sample_size": len(rows),
+        "numeric": {
+            key: {
+                "mean": mean(float(row[key]) for row in rows),
+                "stdev": max(1.0, pstdev(float(row[key]) for row in rows)),
+            }
+            for key in numeric_keys
+        },
+        "categorical": {key: Counter(row[key] for row in rows) for key in categorical_keys},
+    }
+
+
+def _structure_score(front: list[str], back: list[str], profile: dict[str, Any]) -> float:
+    """按历史中结构的常见程度评分；它用于覆盖设计，不代表单注概率更高。"""
+    values = _structure_values(front, back)
+    scores: list[float] = []
+    for key, summary in profile["numeric"].items():
+        z_score = (float(values[key]) - summary["mean"]) / summary["stdev"]
+        scores.append(math.exp(-0.5 * z_score * z_score))
+    for key, counter in profile["categorical"].items():
+        # 加 1 平滑避免历史中暂未出现的结构直接得到 0 分。
+        scores.append((counter[values[key]] + 1) / (max(counter.values()) + 1))
+    return mean(scores)
+
+
+def _structure_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    """生成可序列化摘要，供 AI 和页面解释使用，不暴露整份原始历史。"""
+    categorical = profile["categorical"]
+    zone_mode = categorical["front_zones"].most_common(1)[0][0]
+    return {
+        "sample_size": profile["sample_size"],
+        "front_sum_mean": round(profile["numeric"]["front_sum"]["mean"], 2),
+        "front_sum_stdev": round(profile["numeric"]["front_sum"]["stdev"], 2),
+        "front_span_mean": round(profile["numeric"]["front_span"]["mean"], 2),
+        "back_gap_mean": round(profile["numeric"]["back_gap"]["mean"], 2),
+        "common_odd_count": categorical["front_odd_count"].most_common(1)[0][0],
+        "common_zone_pattern": list(zone_mode),
+        "common_consecutive_pairs": categorical["front_consecutive_pairs"].most_common(1)[0][0],
+    }
 
 
 def _candidate_pool(
@@ -130,6 +179,7 @@ def _candidate_pool(
     target_issue: str,
     front_features: dict[str, dict[str, float]],
     back_features: dict[str, dict[str, float]],
+    structure_profile: dict[str, Any],
     candidate_count: int,
 ) -> list[dict[str, Any]]:
     """用固定种子生成可复现候选池，再按号码权重和结构分排序。"""
@@ -143,10 +193,16 @@ def _candidate_pool(
         front = _weighted_sample(rng, front_scores, 5)
         back = _weighted_sample(rng, back_scores, 2)
         key = tuple(front + back)
-        structure = _structure_score(front, back)
+        structure = _structure_score(front, back, structure_profile)
         number_score = mean([front_scores[number] for number in front] + [back_scores[number] for number in back])
         raw_score = number_score * 0.68 + structure * 0.32
-        candidates[key] = {"front": front, "back": back, "raw_score": raw_score, "structure": structure}
+        candidates[key] = {
+            "front": front,
+            "back": back,
+            "raw_score": raw_score,
+            "structure": structure,
+            "structure_values": _structure_values(front, back),
+        }
     return sorted(candidates.values(), key=lambda item: item["raw_score"], reverse=True)
 
 
@@ -195,6 +251,7 @@ def _ai_request(
     pools: dict[str, list[dict[str, Any]]],
     front_features: dict[str, dict[str, float]],
     back_features: dict[str, dict[str, float]],
+    structure_profile: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, tuple[str, dict[str, Any]]]]:
     """把候选压缩成模型容易理解的 JSON，并保留 ID 到原候选的本地映射。"""
     choices: list[dict[str, Any]] = []
@@ -213,6 +270,10 @@ def _ai_request(
                     "back": item["back"],
                     "statistical_score": round(item["raw_score"] * 100, 2),
                     "factors": {key: factors[key] for key in ("trend", "gap", "structure")},
+                    "structure": {
+                        key: list(value) if isinstance(value, tuple) else value
+                        for key, value in item["structure_values"].items()
+                    },
                 }
             )
     return (
@@ -223,7 +284,13 @@ def _ai_request(
             "based_on_issue": latest["issue"],
             "based_on_date": latest["date"],
             "history_count": history_count,
-            "criteria": ["统计评分", "结构合理性", "三组号码覆盖差异"],
+            "history_method": {
+                "frequency_windows": [30, 100, 300],
+                "recency_decay_window": 300,
+                "empirical_structure": _structure_summary(structure_profile),
+            },
+            "criteria": ["统计评分", "历史结构常见度", "三组号码覆盖差异"],
+            "scientific_limit": "所有合法单注理论概率相同；历史指标仅用于候选排序与覆盖设计",
             "candidates": choices,
         },
         candidate_lookup,
@@ -319,8 +386,16 @@ def generate_prediction(
     target_issue, target_date = next_draw_identity(latest["issue"], latest["date"])
     front_features = _area_features(normalized, "front", 35)
     back_features = _area_features(normalized, "back", 12)
+    structure_profile = _structure_profile(normalized)
     pools = {
-        strategy: _candidate_pool(strategy, target_issue, front_features, back_features, candidate_count)
+        strategy: _candidate_pool(
+            strategy,
+            target_issue,
+            front_features,
+            back_features,
+            structure_profile,
+            candidate_count,
+        )
         for strategy in ("balanced", "trend", "explore")
     }
 
@@ -337,6 +412,7 @@ def generate_prediction(
             pools=pools,
             front_features=front_features,
             back_features=back_features,
+            structure_profile=structure_profile,
         )
         try:
             chosen, reasons = _select_with_ai(ai_selector, request, candidate_lookup)
@@ -351,6 +427,7 @@ def generate_prediction(
     labels = {"balanced": "均衡", "trend": "趋势", "explore": "探索"}
     for strategy in ("balanced", "trend", "explore"):
         item = chosen[strategy]
+        candidate_rank = next(index for index, candidate in enumerate(pools[strategy], start=1) if candidate is item)
         factors = _factor_scores(item, front_features, back_features, selected)
         score = round(0.28 * factors["trend"] + 0.16 * factors["gap"] + 0.34 * factors["structure"] + 0.22 * factors["diversity"])
         recommendation = {
@@ -360,6 +437,8 @@ def generate_prediction(
             "back": item["back"],
             "score": score,
             "factors": factors,
+            "candidate_rank": candidate_rank,
+            "selection_source": "ai" if ai_used else "statistics",
         }
         if ai_used:
             recommendation["selection_reason"] = reasons[strategy]
@@ -387,6 +466,15 @@ def generate_prediction(
         "based_on_issue": latest["issue"],
         "based_on_date": latest["date"],
         "history_count": len(normalized),
+        "methodology": {
+            "history_used": len(normalized),
+            "frequency_windows": [30, 100, 300],
+            "structure_sample_size": structure_profile["sample_size"],
+            "structure_summary": _structure_summary(structure_profile),
+            "candidate_pool_size": {strategy: len(pool) for strategy, pool in pools.items()},
+            "ai_role": "只从本地合法候选 ID 中选择和解释，不允许创造号码",
+            "scientific_limit": "历史统计与 AI 都不能改变任意合法单注的理论中奖概率",
+        },
         "recommendations": recommendations,
         "ai": {
             "enabled": ai_selector is not None,

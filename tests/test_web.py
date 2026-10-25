@@ -8,10 +8,18 @@ import time
 import unittest
 from pathlib import Path
 
-from dlt.web import _read_prediction, resolve_static_path, security_headers
+from dlt.web import _read_prediction, health_payload, history_page, resolve_static_path, security_headers
 
 
 class WebTests(unittest.TestCase):
+    def test_frontend_contains_paginated_history_controls(self):
+        """页面必须保留分页容器，脚本也必须调用独立历史接口。"""
+        html = Path("web/index.html").read_text(encoding="utf-8")
+        script = Path("web/app.js").read_text(encoding="utf-8")
+        for element_id in ("historyRows", "historyPageSize", "historyPrevious", "historyNext", "historyPageInput"):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("/api/history?", script)
+
     def test_static_path_cannot_escape_web_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -23,6 +31,37 @@ class WebTests(unittest.TestCase):
         headers = dict(security_headers())
         self.assertIn("Content-Security-Policy", headers)
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+
+    def test_health_payload_includes_only_injected_runtime_status(self):
+        value = health_payload(
+            [{"issue": "26121"}],
+            {"ai_enabled": True, "ai_required": True, "scheduler_enabled": False},
+        )
+        self.assertEqual(value["latest_issue"], "26121")
+        self.assertTrue(value["ai_enabled"])
+        self.assertTrue(value["ai_required"])
+        self.assertFalse(value["scheduler_enabled"])
+        self.assertNotIn("api_key", value)
+
+    def test_history_page_returns_requested_slice_and_metadata(self):
+        draws = [{"issue": f"{index:05d}"} for index in range(65, 0, -1)]
+        value = history_page(draws, page=2, page_size=30)
+        self.assertEqual(value["total"], 65)
+        self.assertEqual(value["total_pages"], 3)
+        self.assertEqual(value["page"], 2)
+        self.assertEqual(len(value["items"]), 30)
+        self.assertEqual(value["items"][0]["issue"], "00035")
+
+    def test_history_page_last_and_out_of_range_pages(self):
+        draws = [{"issue": f"{index:05d}"} for index in range(1, 66)]
+        self.assertEqual(len(history_page(draws, page=3, page_size=30)["items"]), 5)
+        self.assertEqual(history_page(draws, page=4, page_size=30)["items"], [])
+
+    def test_history_page_rejects_invalid_parameters(self):
+        with self.assertRaises(ValueError):
+            history_page([], page=0, page_size=30)
+        with self.assertRaises(ValueError):
+            history_page([], page=1, page_size=101)
 
     def test_stale_prediction_cache_is_regenerated(self):
         with tempfile.TemporaryDirectory() as tmp:

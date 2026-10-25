@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import threading
 import time
@@ -48,6 +49,31 @@ def resolve_static_path(web_root: Path, request_path: str) -> Path | None:
     if not candidate.is_file():
         return None
     return candidate
+
+
+def health_payload(draws: list[dict[str, Any]], service_status: dict[str, bool] | None = None) -> dict[str, Any]:
+    """组合数据健康信息和主程序注入的非敏感运行模式。"""
+    value: dict[str, Any] = {"status": "ok", "draw_count": len(draws), "latest_issue": draws[0]["issue"]}
+    value.update(service_status or {})
+    return value
+
+
+def history_page(draws: list[dict[str, Any]], *, page: int, page_size: int) -> dict[str, Any]:
+    """返回历史数据的一页；调用方负责先把页码限制在安全范围内。"""
+    if page < 1:
+        raise ValueError("page must be at least 1")
+    if not 1 <= page_size <= 100:
+        raise ValueError("page_size must be between 1 and 100")
+    total = len(draws)
+    total_pages = max(1, math.ceil(total / page_size))
+    start = (page - 1) * page_size
+    return {
+        "items": draws[start : start + page_size],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    }
 
 
 def _read_prediction(
@@ -106,6 +132,7 @@ def create_handler(
     web_root: Path,
     predict_func: Callable[[list[dict[str, Any]]], dict[str, Any]] = generate_prediction,
     expected_profile: str = DEFAULT_PREDICTION_PROFILE,
+    service_status: dict[str, bool] | None = None,
 ):
     """创建绑定项目路径和预测函数的请求处理器类。"""
     class Handler(BaseHTTPRequestHandler):
@@ -144,7 +171,7 @@ def create_handler(
             parsed = urlsplit(self.path)
             if parsed.path == "/api/health":
                 draws = load_draws(data_path)
-                self._send_json({"status": "ok", "draw_count": len(draws), "latest_issue": draws[0]["issue"]}, head_only=head_only)
+                self._send_json(health_payload(draws, service_status), head_only=head_only)
                 return
             if parsed.path == "/api/prediction":
                 self._send_json(
@@ -156,6 +183,22 @@ def create_handler(
                     ),
                     head_only=head_only,
                 )
+                return
+            if parsed.path == "/api/history":
+                query = parse_qs(parsed.query)
+                try:
+                    page = int(query.get("page", ["1"])[0])
+                    page_size = int(query.get("page_size", ["30"])[0])
+                    if page < 1 or not 1 <= page_size <= 100:
+                        raise ValueError
+                except ValueError:
+                    self._send_json(
+                        {"error": "page must be >= 1 and page_size must be between 1 and 100"},
+                        HTTPStatus.BAD_REQUEST,
+                        head_only=head_only,
+                    )
+                    return
+                self._send_json(history_page(load_draws(data_path), page=page, page_size=page_size), head_only=head_only)
                 return
             if parsed.path == "/api/history/latest":
                 query = parse_qs(parsed.query)
@@ -200,6 +243,7 @@ def serve(
     web_root: Path,
     predict_func: Callable[[list[dict[str, Any]]], dict[str, Any]] = generate_prediction,
     prediction_profile: str = DEFAULT_PREDICTION_PROFILE,
+    service_status: dict[str, bool] | None = None,
 ) -> None:
     """启动多线程只读 HTTP 服务；预测函数由主程序按 AI 配置注入。"""
     handler = create_handler(
@@ -208,6 +252,7 @@ def serve(
         web_root=web_root,
         predict_func=predict_func,
         expected_profile=prediction_profile,
+        service_status=service_status,
     )
     server = ThreadingHTTPServer((host, port), handler)
     print(f"DLT service listening on http://{host}:{port}")

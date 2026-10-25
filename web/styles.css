@@ -313,6 +313,180 @@ h2 {
   line-height: 1.8;
 }
 
+/* 历史表格单独分页，既减少接口传输，也避免一次创建几千行 DOM。 */
+.history-panel {
+  margin-top: 28px;
+  padding: 28px 30px 24px;
+}
+
+.history-head,
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-head .subtle {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-size {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-size strong {
+  min-width: 92px;
+  color: var(--lime);
+  font: 700 13px "Cascadia Mono", monospace;
+  text-align: right;
+}
+
+select,
+input,
+.pagination button {
+  min-height: 38px;
+  border: 1px solid #345148;
+  border-radius: 10px;
+  color: var(--text);
+  background: #102019;
+  font: inherit;
+}
+
+select,
+input {
+  padding: 0 11px;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+  margin-top: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.history-table {
+  width: 100%;
+  min-width: 700px;
+  border-collapse: collapse;
+}
+
+.history-table th,
+.history-table td {
+  padding: 13px 18px;
+  border-bottom: 1px solid rgba(66, 91, 82, 0.58);
+  text-align: left;
+}
+
+.history-table th {
+  color: var(--muted);
+  background: #0e1d17;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.history-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.history-table tbody tr:hover {
+  background: rgba(216, 255, 93, 0.035);
+}
+
+.history-issue {
+  color: var(--lime);
+  font: 700 14px "Cascadia Mono", monospace;
+}
+
+.history-date {
+  color: #c7d2cc;
+  font: 13px "Cascadia Mono", monospace;
+}
+
+.history-balls {
+  display: flex;
+  gap: 7px;
+}
+
+.history-ball {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  font: 700 12px "Bahnschrift", sans-serif;
+}
+
+.history-ball.front {
+  background: #d94e60;
+}
+
+.history-ball.back {
+  background: #318bd6;
+}
+
+.history-message {
+  height: 110px;
+  color: var(--muted);
+  text-align: center !important;
+}
+
+.error-text {
+  color: #ffc1c8;
+}
+
+.pagination {
+  justify-content: flex-start;
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pagination button {
+  padding: 0 14px;
+  cursor: pointer;
+}
+
+.pagination button:hover:not(:disabled) {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+
+.pagination button:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+#historyPageMeta {
+  min-width: 100px;
+  text-align: center;
+}
+
+.page-jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.page-jump input {
+  width: 72px;
+}
+
+#historyStatus {
+  min-width: 112px;
+  text-align: right;
+}
+
 /* 右侧解释面板。 */
 .explanation .subtle {
   margin: 12px 0 28px;
@@ -391,6 +565,20 @@ hr {
 .signal-grid strong {
   color: var(--blue);
   font: 800 16px "Cascadia Mono", monospace;
+}
+
+.method-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-left: 18px;
+  color: #c6d1cc;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.method-list li::marker {
+  color: var(--lime);
 }
 
 /* 底部展示执行流程和预算提醒。 */
@@ -531,7 +719,8 @@ footer {
   }
 
   .predictions,
-  .explanation {
+  .explanation,
+  .history-panel {
     padding: 20px;
   }
 
@@ -566,6 +755,26 @@ footer {
 
   .signal-grid {
     grid-template-columns: 1fr;
+  }
+
+  .history-head,
+  .pagination {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .history-size {
+    width: 100%;
+  }
+
+  .page-jump {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  #historyStatus {
+    width: 100%;
+    text-align: left;
   }
 
   .pipeline-row {

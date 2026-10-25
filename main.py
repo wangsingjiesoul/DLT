@@ -6,12 +6,13 @@ import argparse
 import json
 import logging
 import os
+import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from time import sleep
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dlt.ai import AIConfigError, AISelectionError, OpenAICompatibleSelector
 from dlt.automation import AutomationRunner
@@ -178,11 +179,133 @@ def _schedule_config() -> tuple[int, int, set[int]]:
     return hour, minute, weekdays
 
 
+def _retry_minutes() -> int:
+    """读取开奖未更新时的重试间隔，并拒绝非整数配置。"""
+    try:
+        return max(1, int(os.getenv("DLT_SCHEDULE_RETRY_MINUTES", "10")))
+    except ValueError as exc:
+        raise ValueError("DLT_SCHEDULE_RETRY_MINUTES 必须是整数分钟") from exc
+
+
+def _load_timezone(name: str) -> tuple[tzinfo, str]:
+    """读取 IANA 时区；Windows 缺少时区库时为北京时间提供安全后备。
+
+    Linux/Docker 会优先使用完整的 ``Asia/Shanghai`` 规则。部分 Windows
+    Python 没有自带 IANA 数据，但中国大陆自 1991 年后一直使用 UTC+8，
+    因此本项目面向当前开奖调度时可安全退回固定 UTC+8。
+    """
+    try:
+        return ZoneInfo(name), "iana"
+    except ZoneInfoNotFoundError as exc:
+        if name == "Asia/Shanghai":
+            return timezone(timedelta(hours=8), name), "fixed-utc+8-fallback"
+        raise ValueError(f"找不到时区：{name}") from exc
+
+
+def _safe_notifier_id(notifier: QmsgNotifier | PushPlusNotifier) -> str:
+    """返回不包含群号、接收人和凭证的通知渠道名称。"""
+    if isinstance(notifier, QmsgNotifier):
+        return "qmsg:group" if notifier.group else "qmsg:direct"
+    return f"pushplus:{notifier.channel}"
+
+
+def build_doctor_report(
+    *,
+    data_path: Path = DATA_PATH,
+    runtime_dir: Path = RUNTIME_DIR,
+) -> dict[str, Any]:
+    """执行不联网、不发消息的部署体检，并返回不含凭证的结构化结果。"""
+    report: dict[str, Any] = {}
+    core_ok = True
+
+    try:
+        draws = load_draws(data_path)
+        report["data"] = {
+            "ok": True,
+            "draw_count": len(draws),
+            "latest_issue": draws[0]["issue"],
+            "latest_date": draws[0]["date"],
+        }
+    except (ValueError, OSError, json.JSONDecodeError):
+        core_ok = False
+        report["data"] = {"ok": False, "error": "历史数据读取或校验失败"}
+
+    try:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        # 临时文件在关闭后自动删除，用于验证 Docker 命名卷或本地目录确实可写。
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=runtime_dir, prefix=".doctor.") as handle:
+            handle.write("ok")
+            handle.flush()
+        report["runtime"] = {"writable": True}
+    except OSError:
+        core_ok = False
+        report["runtime"] = {"writable": False, "error": "运行目录不可写"}
+
+    ai_config_valid = True
+    try:
+        selector, ai_required = build_ai_selector()
+        report["ai"] = {
+            "configured": selector is not None,
+            "required": ai_required,
+            "model": selector.model if selector is not None else None,
+        }
+    except (ValueError, OSError):
+        ai_config_valid = False
+        core_ok = False
+        report["ai"] = {"configured": False, "required": False, "model": None, "error": "AI 配置无效"}
+
+    notifier_config_valid = True
+    try:
+        notifiers = build_notifiers(required=False)
+        report["notifications"] = {
+            "configured": bool(notifiers),
+            "channels": [_safe_notifier_id(notifier) for notifier in notifiers],
+        }
+    except (ValueError, OSError):
+        notifier_config_valid = False
+        core_ok = False
+        report["notifications"] = {"configured": False, "channels": [], "error": "通知配置无效"}
+
+    try:
+        hour, minute, weekdays = _schedule_config()
+        timezone_name = os.getenv("DLT_TIMEZONE", "Asia/Shanghai")
+        _timezone, timezone_source = _load_timezone(timezone_name)
+        retry_minutes = _retry_minutes()
+        report["schedule"] = {
+            "valid": True,
+            "timezone": timezone_name,
+            "timezone_source": timezone_source,
+            "time": f"{hour:02d}:{minute:02d}",
+            "weekdays": sorted(weekdays),
+            "retry_minutes": retry_minutes,
+        }
+    except (ValueError, OSError, ZoneInfoNotFoundError):
+        core_ok = False
+        report["schedule"] = {"valid": False, "error": "定时或时区配置无效"}
+
+    ai = report["ai"]
+    notifications = report["notifications"]
+    schedule = report["schedule"]
+    deployment_ready = bool(
+        core_ok
+        and ai_config_valid
+        and ai.get("configured")
+        and ai.get("required")
+        and notifier_config_valid
+        and notifications.get("configured")
+        and schedule.get("valid")
+    )
+    report["ok"] = core_ok
+    report["deployment_ready"] = deployment_ready
+    report["notice"] = "本检查不访问开奖源或 AI，也不会发送通知；请另用 ai-check 验证真实模型调用。"
+    return report
+
+
 def start_scheduler(runner: AutomationRunner) -> threading.Thread:
     """在后台线程中按北京时间触发更新；数据未发布时按间隔重试。"""
     hour, minute, weekdays = _schedule_config()
-    timezone = ZoneInfo(os.getenv("DLT_TIMEZONE", "Asia/Shanghai"))
-    retry_minutes = max(1, int(os.getenv("DLT_SCHEDULE_RETRY_MINUTES", "10")))
+    timezone, _timezone_source = _load_timezone(os.getenv("DLT_TIMEZONE", "Asia/Shanghai"))
+    retry_minutes = _retry_minutes()
 
     def loop() -> None:
         # 这些变量只存在内存中；真正的通知去重状态由 AutomationRunner 落盘。
@@ -204,8 +327,10 @@ def start_scheduler(runner: AutomationRunner) -> threading.Thread:
                     if result["fresh"]:
                         last_success_date = now.date()
                         LOG.info(
-                            "自动周期完成：目标期号=%s，已通知=%s",
-                            result["prediction"]["target_issue"], result["notified"],
+                            "自动周期完成：目标期号=%s，AI=%s，已通知=%s",
+                            result["prediction"]["target_issue"],
+                            result["prediction"].get("ai", {}).get("status", "unknown"),
+                            result["notified"],
                         )
                     else:
                         LOG.warning("开奖源尚未更新到 %s，将稍后重试", now.date().isoformat())
@@ -265,7 +390,14 @@ def command_run_once(args: argparse.Namespace) -> int:
 
 def command_backtest(args: argparse.Namespace) -> int:
     """CLI：运行不调用外部 AI 的统计层滚动回测。"""
-    result = run_backtest(load_draws(DATA_PATH), rounds=args.rounds, candidate_count=args.candidates)
+    result = run_backtest(
+        load_draws(DATA_PATH),
+        rounds=args.rounds,
+        candidate_count=args.candidates,
+        baseline_repeats=args.baseline_repeats,
+    )
+    # 保存最近一次审计，方便部署者比较模型版本；runtime 目录不会提交到 Git。
+    write_json_atomic(RUNTIME_DIR / "latest_backtest.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -306,6 +438,15 @@ def command_ai_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_doctor(args: argparse.Namespace) -> int:
+    """CLI：在不联网、不发消息的前提下检查部署所需配置。"""
+    report = build_doctor_report()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if args.deployment:
+        return 0 if report["deployment_ready"] else 1
+    return 0 if report["ok"] else 1
+
+
 def command_serve(args: argparse.Namespace) -> int:
     """CLI：启动网页/API，并按参数决定是否同时启动定时器。"""
     # 启用调度器就必须配置通知渠道，避免服务看似正常运行、实际无人收到消息。
@@ -321,6 +462,11 @@ def command_serve(args: argparse.Namespace) -> int:
         web_root=WEB_ROOT,
         predict_func=predict_func,
         prediction_profile=profile,
+        service_status={
+            "ai_enabled": _env_flag("AI_ENABLED"),
+            "ai_required": _env_flag("AI_REQUIRED"),
+            "scheduler_enabled": not args.no_scheduler,
+        },
     )
     return 0
 
@@ -349,11 +495,16 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser = subparsers.add_parser("backtest", help="按时间顺序比较模型和随机基线")
     backtest_parser.add_argument("--rounds", type=int, default=30, help="回测最近多少期")
     backtest_parser.add_argument("--candidates", type=int, default=250, help="每种策略生成的候选数")
+    backtest_parser.add_argument("--baseline-repeats", type=int, default=30, help="每期重复随机基线次数")
     backtest_parser.set_defaults(handler=command_backtest)
 
     ai_check_parser = subparsers.add_parser("ai-check", help="真实调用一次 AI，安全检查配置和候选重排")
     ai_check_parser.add_argument("--candidates", type=int, default=300, help="每种策略的本地候选抽样次数")
     ai_check_parser.set_defaults(handler=command_ai_check)
+
+    doctor_parser = subparsers.add_parser("doctor", help="离线检查数据、AI、通知、时区和部署就绪状态")
+    doctor_parser.add_argument("--deployment", action="store_true", help="要求 AI 严格模式和通知渠道均已配置")
+    doctor_parser.set_defaults(handler=command_doctor)
 
     serve_parser = subparsers.add_parser("serve", help="启动网页、API 和定时任务")
     serve_parser.add_argument("--host", default=os.getenv("DLT_HOST", "127.0.0.1"))

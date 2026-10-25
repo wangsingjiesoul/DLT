@@ -50,7 +50,53 @@
           <div><small>后区最大遗漏</small><strong id="backGap">—</strong></div>
         </div>
         <p class="fine-print">热号和遗漏只描述历史，不代表下一期更容易出现。</p>
+        <hr>
+        <p class="eyebrow">METHOD AUDIT</p>
+        <ul id="methodList" class="method-list">
+          <li>正在读取模型方法…</li>
+        </ul>
       </aside>
+    </section>
+    <!-- 历史开奖按页读取，避免浏览器一次渲染近三千条记录。 -->
+    <section class="panel history-panel" aria-labelledby="historyTitle">
+      <div class="history-head">
+        <div>
+          <p class="eyebrow">DRAW ARCHIVE</p>
+          <h2 id="historyTitle">往期开奖数据</h2>
+          <p class="subtle">默认每页 30 期，翻页只读取历史接口，不会重复调用 AI。</p>
+        </div>
+        <div class="history-size">
+          <label for="historyPageSize">每页显示</label>
+          <select id="historyPageSize">
+            <option value="20">20 期</option>
+            <option value="30" selected>30 期</option>
+            <option value="50">50 期</option>
+            <option value="100">100 期</option>
+          </select>
+          <strong id="historyTotal">共 — 期</strong>
+        </div>
+      </div>
+      <div class="history-table-wrap" id="historyTableWrap" aria-busy="true">
+        <table class="history-table">
+          <thead>
+            <tr><th scope="col">期号</th><th scope="col">开奖日期</th><th scope="col">前区</th><th scope="col">后区</th></tr>
+          </thead>
+          <tbody id="historyRows">
+            <tr><td colspan="4" class="history-message">正在读取历史开奖…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination" aria-label="历史开奖分页">
+        <button id="historyPrevious" type="button">← 上一页</button>
+        <span id="historyPageMeta" aria-live="polite">第 — / — 页</span>
+        <button id="historyNext" type="button">下一页 →</button>
+        <form id="historyJumpForm" class="page-jump">
+          <label for="historyPageInput">跳到</label>
+          <input id="historyPageInput" type="number" min="1" value="1" inputmode="numeric">
+          <button type="submit">前往</button>
+        </form>
+        <small id="historyStatus" role="status"></small>
+      </div>
     </section>
     <!-- 用流程图帮助零基础用户理解后端从数据到推荐的处理顺序。 -->
     <section class="bottom-grid">

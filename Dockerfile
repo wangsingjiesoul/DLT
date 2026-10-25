@@ -7,8 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY . /app
 
+# tzdata 提供 Asia/Shanghai 等 IANA 时区；随后清理 apt 缓存以控制镜像大小。
 # 不使用 root 运行 Web 服务，减少容器被攻击后的权限范围。
-RUN useradd --create-home --uid 10001 app \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app \
     && mkdir -p /app/runtime \
     && chown -R app:app /app
 
