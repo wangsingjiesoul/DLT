@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于大乐透历史开奖数据的统计候选生成与解释页面">
+  <title>大乐透信号实验室</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <main class="shell">
+    <header class="topbar">
+      <div><p class="eyebrow">DLT / SIGNAL LAB</p><h1>大乐透号码研究终端</h1></div>
+      <div class="sync-pill" aria-live="polite">
+        <i></i><span><b>数据已同步</b><small id="syncMeta">正在读取…</small></span><em>LIVE</em>
+      </div>
+    </header>
+    <section class="notice" aria-label="风险提示">
+      <span class="warning">!</span>
+      <p>开奖是独立随机事件；候选组合来自历史统计，不改变任意单注的理论中奖概率。</p>
+      <code>1 / 21,425,712</code>
+    </section>
+    <section class="layout">
+      <article class="panel predictions">
+        <div class="section-head">
+          <div><p class="eyebrow">NEXT DRAW / <span id="targetIssue">—</span></p><h2>模型候选组合</h2></div>
+          <div class="model-meta"><span id="targetDate">预计日期 —</span><span id="modelVersion">模型 —</span></div>
+        </div>
+        <div id="recommendations" class="recommendation-list" aria-live="polite"></div>
+        <p class="fine-print">评分用于候选排序，不等同于中奖概率；生成过程保留受控随机抽样，避免伪精确。</p>
+      </article>
+      <aside class="panel explanation">
+        <p class="eyebrow">EXPLANATION LAYER</p><h2>为什么是这组？</h2>
+        <p class="subtle">选择任意组合即可查看热度、遗漏、结构和差异度。</p>
+        <div id="factorList" class="factors"></div><hr>
+        <p class="eyebrow">CURRENT SIGNALS</p>
+        <div class="signal-grid">
+          <div><small>近 30 期热号</small><strong id="hotFront">—</strong></div>
+          <div><small>前区最大遗漏</small><strong id="frontGap">—</strong></div>
+          <div><small>后区最大遗漏</small><strong id="backGap">—</strong></div>
+        </div>
+        <p class="fine-print">热号和遗漏只描述历史，不代表下一期更容易出现。</p>
+      </aside>
+    </section>
+    <section class="bottom-grid">
+      <article class="panel pipeline">
+        <p class="eyebrow">BACKEND PIPELINE</p>
+        <div class="pipeline-row">
+          <span>数据校验<small>去重 · 日期</small></span><b>→</b>
+          <span>滚动特征<small>30 / 100 / 300</small></span><b>→</b>
+          <span>时间回测<small>隔离未来数据</small></span><b>→</b>
+          <span>约束采样<small>分区 · 奇偶</small></span><b>→</b>
+          <span class="pipeline-final">推荐<small>含解释</small></span>
+        </div>
+      </article>
+      <article class="budget">
+        <p class="eyebrow">RESPONSIBLE PLAY</p><h2>理性预算模式</h2>
+        <p>建议单次不超过 3 组，默认预算上限 ¥20。</p>
+        <div class="budget-line"><i></i></div><code>¥ 6 / ¥ 20</code>
+      </article>
+    </section>
+    <footer><span>统计研究用途 · 不构成投资或投注建议</span><span id="basedOn">数据截至 —</span></footer>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -56,6 +56,7 @@ class PushPlusNotifier:
         channel: str = "wechat",
         topic: str | None = None,
         recipient: str | None = None,
+        option: str | None = None,
         opener: Callable[..., Any] = urlopen,
         timeout: int = 15,
     ) -> None:
@@ -69,6 +70,7 @@ class PushPlusNotifier:
         self.channel = channel
         self.topic = topic.strip() if topic else None
         self.recipient = recipient.strip() if recipient else None
+        self.option = option.strip() if option else None
         self._opener = opener
         self.timeout = timeout
 
@@ -84,6 +86,8 @@ class PushPlusNotifier:
             payload["topic"] = self.topic
         if self.recipient:
             payload["to"] = self.recipient
+        if self.option:
+            payload["option"] = self.option
         request = Request(
             PUSHPLUS_ENDPOINT,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

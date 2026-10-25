@@ -45,11 +45,19 @@ class NotifierTests(unittest.TestCase):
             captured["timeout"] = timeout
             return FakeResponse()
 
-        notifier = PushPlusNotifier(token="test-token", channel="wechat", opener=opener)
+        notifier = PushPlusNotifier(
+            token="test-token",
+            channel="qq",
+            recipient="123456",
+            option="qq-config-code",
+            opener=opener,
+        )
         response = notifier.send(PREDICTION)
         self.assertEqual(response["code"], 200)
         self.assertEqual(captured["payload"]["token"], "test-token")
-        self.assertEqual(captured["payload"]["channel"], "wechat")
+        self.assertEqual(captured["payload"]["channel"], "qq")
+        self.assertEqual(captured["payload"]["to"], "123456")
+        self.assertEqual(captured["payload"]["option"], "qq-config-code")
         self.assertNotIn("test-token", format_prediction_markdown(PREDICTION))
 
 

@@ -1,0 +1,24 @@
+services:
+  dlt:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${DLT_PORT:-8000}:8000"
+    environment:
+      PUSHPLUS_TOKEN: "${PUSHPLUS_TOKEN:-}"
+      PUSHPLUS_CHANNEL: "${PUSHPLUS_CHANNEL:-wechat}"
+      PUSHPLUS_TOPIC: "${PUSHPLUS_TOPIC:-}"
+      PUSHPLUS_TO: "${PUSHPLUS_TO:-}"
+      PUSHPLUS_OPTION: "${PUSHPLUS_OPTION:-}"
+      DLT_TIMEZONE: "${DLT_TIMEZONE:-Asia/Shanghai}"
+      DLT_SCHEDULE_TIME: "${DLT_SCHEDULE_TIME:-22:35}"
+      DLT_SCHEDULE_WEEKDAYS: "${DLT_SCHEDULE_WEEKDAYS:-0,2,5}"
+      DLT_SCHEDULE_RETRY_MINUTES: "${DLT_SCHEDULE_RETRY_MINUTES:-10}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      - dlt_data:/app/data
+      - dlt_runtime:/app/runtime
+
+volumes:
+  dlt_data:
+  dlt_runtime:

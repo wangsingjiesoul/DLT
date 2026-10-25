@@ -1,0 +1,13 @@
+.git
+.gitignore
+.idea
+.venv
+__pycache__
+*.py[cod]
+.env
+.env.*
+!.env.example
+runtime
+tests
+design
+docs/plans

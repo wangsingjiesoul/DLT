@@ -40,7 +40,14 @@ class AutomationRunner:
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def run(self, *, update: bool = True, notify: bool = True, force_notify: bool = False) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        update: bool = True,
+        notify: bool = True,
+        force_notify: bool = False,
+        expected_latest_date: str | None = None,
+    ) -> dict[str, Any]:
         update_result = None
         if update:
             update_result = self.update_func(self.data_path)
@@ -48,11 +55,12 @@ class AutomationRunner:
         prediction = self.predict_func(draws)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.prediction_path, prediction)
+        fresh = expected_latest_date is None or prediction.get("based_on_date") == expected_latest_date
 
         state = self._load_state()
         notified = False
         notification_result = None
-        if notify and self.notifier is not None:
+        if notify and self.notifier is not None and fresh:
             already_sent = state.get("last_notified_issue") == prediction["target_issue"]
             if force_notify or not already_sent:
                 notification_result = self.notifier.send(prediction)
@@ -65,5 +73,6 @@ class AutomationRunner:
             "update": update_result,
             "notified": notified,
             "notification": notification_result,
+            "fresh": fresh,
         }
 

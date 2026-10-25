@@ -28,6 +28,9 @@ def parse_history_html(document: str) -> list[dict[str, Any]]:
     """解析 500 历史表格；只接收满足大乐透字段约束的行。"""
     rows: list[dict[str, Any]] = []
     for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", document, flags=re.IGNORECASE | re.DOTALL):
+        # 页面在真实数据行前保留了一个注释掉的 <td>，必须先移除注释，
+        # 否则正则会把注释内容误判为第一列期号。
+        row_html = re.sub(r"<!--.*?-->", "", row_html, flags=re.DOTALL)
         cells = re.findall(r"<td\b([^>]*)>(.*?)</td>", row_html, flags=re.IGNORECASE | re.DOTALL)
         if not cells:
             continue

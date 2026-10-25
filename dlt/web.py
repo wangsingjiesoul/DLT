@@ -39,15 +39,18 @@ def resolve_static_path(web_root: Path, request_path: str) -> Path | None:
 
 
 def _read_prediction(data_path: Path, runtime_dir: Path) -> dict[str, Any]:
+    draws = load_draws(data_path)
+    latest_issue = draws[0]["issue"]
     prediction_path = runtime_dir / "latest_prediction.json"
     if prediction_path.exists():
         try:
             value = json.loads(prediction_path.read_text(encoding="utf-8"))
-            if isinstance(value, dict):
+            # 数据由 CLI 单独更新时，不能继续向页面返回基于旧期号的缓存。
+            if isinstance(value, dict) and value.get("based_on_issue") == latest_issue:
                 return value
         except (OSError, json.JSONDecodeError):
             pass
-    prediction = generate_prediction(load_draws(data_path))
+    prediction = generate_prediction(draws)
     write_json_atomic(prediction_path, prediction)
     return prediction
 
@@ -55,6 +58,10 @@ def _read_prediction(data_path: Path, runtime_dir: Path) -> dict[str, Any]:
 def create_handler(*, data_path: Path, runtime_dir: Path, web_root: Path):
     class Handler(BaseHTTPRequestHandler):
         server_version = "DLTService/0.2"
+        sys_version = ""
+
+        def version_string(self) -> str:
+            return self.server_version
 
         def log_message(self, format_string: str, *args: Any) -> None:
             print(f"[web] {self.address_string()} {format_string % args}")
