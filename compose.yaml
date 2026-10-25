@@ -5,6 +5,7 @@ services:
     ports:
       - "${DLT_PORT:-8000}:8000"
     environment:
+      # 通知服务配置。敏感值由同目录 .env 提供，不要直接写进本文件。
       NOTIFY_PROVIDER: "${NOTIFY_PROVIDER:-}"
       QMSG_KEY: "${QMSG_KEY:-}"
       QMSG_GROUP: "${QMSG_GROUP:-}"
@@ -14,12 +15,21 @@ services:
       PUSHPLUS_TOPIC: "${PUSHPLUS_TOPIC:-}"
       PUSHPLUS_TO: "${PUSHPLUS_TO:-}"
       PUSHPLUS_OPTION: "${PUSHPLUS_OPTION:-}"
+      # OpenAI-compatible 模型配置。AI_REQUIRED=true 时失败不会发送统计回退结果。
+      AI_ENABLED: "${AI_ENABLED:-false}"
+      AI_REQUIRED: "${AI_REQUIRED:-false}"
+      AI_BASE_URL: "${AI_BASE_URL:-https://api.openai.com/v1}"
+      AI_API_KEY: "${AI_API_KEY:-}"
+      AI_MODEL: "${AI_MODEL:-}"
+      AI_TIMEOUT: "${AI_TIMEOUT:-30}"
+      # 定时器使用 Python weekday 编号：周一为 0，周日为 6。
       DLT_TIMEZONE: "${DLT_TIMEZONE:-Asia/Shanghai}"
       DLT_SCHEDULE_TIME: "${DLT_SCHEDULE_TIME:-22:35}"
       DLT_SCHEDULE_WEEKDAYS: "${DLT_SCHEDULE_WEEKDAYS:-0,2,5}"
       DLT_SCHEDULE_RETRY_MINUTES: "${DLT_SCHEDULE_RETRY_MINUTES:-10}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     volumes:
+      # 数据和运行状态放在命名卷中，重建容器后仍然保留。
       - dlt_data:/app/data
       - dlt_runtime:/app/runtime
 

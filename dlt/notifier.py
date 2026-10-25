@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+# 外部服务地址是固定常量，不能由公网请求动态指定，避免 SSRF。
 PUSHPLUS_ENDPOINT = "https://www.pushplus.plus/send"
 QMSG_ENDPOINT = "https://qmsg.zendee.cn/v3/jsend/{key}"
 MAX_RESPONSE_BYTES = 65_536
@@ -23,12 +24,30 @@ class NotificationError(RuntimeError):
     """通知服务拒绝或未完成请求。"""
 
 
+def _ai_summary(prediction: dict[str, Any]) -> str:
+    """生成不会包含 API Key 或接口地址的简短 AI 状态。"""
+    ai = prediction.get("ai")
+    if not isinstance(ai, dict) or not ai.get("enabled"):
+        return "统计模式：未启用外部 AI"
+    if ai.get("used"):
+        model = re.sub(r"[^\w./:+-]", "", str(ai.get("model") or "已配置模型"))[:200] or "已配置模型"
+        return f"AI 重排：已使用 {model}"
+    return "AI 重排：调用未完成，本次已回退统计排序"
+
+
+def _escape_markdown(value: Any) -> str:
+    """转义模型文本中的 Markdown 控制符，避免理由改变通知版式。"""
+    return re.sub(r"([\\`*_{}\[\]()#+.!|>])", r"\\\1", str(value))
+
+
 def format_prediction_markdown(prediction: dict[str, Any]) -> str:
+    """生成适合 PushPlus 的 Markdown 消息。"""
     lines = [
         f"## 大乐透 {prediction['target_issue']} 期候选",
         "",
         f"预计开奖日期：**{prediction.get('target_date', '待定')}**",
         f"数据截至：{prediction.get('based_on_issue', '-')} 期",
+        _ai_summary(prediction),
         "",
     ]
     for index, item in enumerate(prediction.get("recommendations", []), start=1):
@@ -39,6 +58,7 @@ def format_prediction_markdown(prediction: dict[str, Any]) -> str:
                 f"### {index}. {item.get('label', item.get('strategy', '候选'))}策略 · 评分 {item.get('score', '-')}",
                 f"- 前区：**{front}**",
                 f"- 后区：**{back}**",
+                *([f"- AI 理由：{_escape_markdown(item['selection_reason'])}"] if item.get("selection_reason") else []),
                 "",
             ]
         )
@@ -63,6 +83,7 @@ def format_prediction_text(prediction: dict[str, Any]) -> str:
         f"大乐透 {target_issue} 期候选",
         f"预计开奖日期：{prediction.get('target_date', '待定')}",
         f"数据截至：{based_on_issue} 期",
+        _ai_summary(prediction),
         "",
     ]
     for index, item in enumerate(prediction.get("recommendations", []), start=1):
@@ -71,6 +92,7 @@ def format_prediction_text(prediction: dict[str, Any]) -> str:
                 f"{index}. {item.get('label', item.get('strategy', '候选'))}策略（评分 {item.get('score', '-')}）",
                 f"前区：{' '.join(item['front'])}",
                 f"后区：{' '.join(item['back'])}",
+                *([f"AI 理由：{item['selection_reason']}"] if item.get("selection_reason") else []),
                 "",
             ]
         )
@@ -94,6 +116,7 @@ class QmsgNotifier:
         opener: Callable[..., Any] = urlopen,
         timeout: int = 15,
     ) -> None:
+        """校验 Key 和可选群号；真实 Key 不保存在公开属性中。"""
         key = key.strip()
         if not QMSG_KEY_RE.fullmatch(key):
             raise NotificationConfigError("QMSG_KEY 未配置或格式异常")
@@ -107,6 +130,7 @@ class QmsgNotifier:
         self.timeout = timeout
 
     def send(self, prediction: dict[str, Any]) -> dict[str, Any]:
+        """发送 QQ 纯文本；success=true 才视为本渠道成功。"""
         message = format_prediction_text(prediction)
         if len(message) > 1800:
             raise NotificationError("Qmsg 消息超过 1800 字符限制")
@@ -145,6 +169,8 @@ class QmsgNotifier:
 
 
 class PushPlusNotifier:
+    """通过 PushPlus 向微信或已配置的 QQ 通道发送 Markdown。"""
+
     def __init__(
         self,
         token: str,
@@ -156,6 +182,7 @@ class PushPlusNotifier:
         opener: Callable[..., Any] = urlopen,
         timeout: int = 15,
     ) -> None:
+        """保存渠道配置并在发请求前校验明显错误。"""
         token = token.strip()
         channel = channel.strip().lower()
         if not token or len(token) > 256:
@@ -174,6 +201,7 @@ class PushPlusNotifier:
         self.timeout = timeout
 
     def send(self, prediction: dict[str, Any]) -> dict[str, Any]:
+        """调用 PushPlus 接口；只有 code=200 才视为渠道成功。"""
         payload: dict[str, Any] = {
             "token": self._token,
             "title": f"大乐透 {prediction['target_issue']} 期候选号码",

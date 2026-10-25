@@ -1,3 +1,5 @@
+"""自动化流程测试：重点保护通知去重、新鲜度和失败重试行为。"""
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -73,6 +75,26 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(wechat.calls, 1)
         self.assertEqual(qq.calls, 2)
         self.assertEqual(second["notified_channels"], ["pushplus:qq"])
+
+    def test_prediction_failure_stops_before_any_notification(self):
+        notifier = FakeNotifier()
+
+        def failed_prediction(_draws):
+            raise RuntimeError("AI strict mode failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = AutomationRunner(
+                data_path=Path(tmp) / "dlt.json",
+                runtime_dir=Path(tmp) / "runtime",
+                update_func=lambda *_args, **_kwargs: [],
+                predict_func=failed_prediction,
+                notifier=notifier,
+                load_func=lambda _path: [{"issue": "26121"}],
+            )
+            with self.assertRaises(RuntimeError):
+                runner.run(update=False, notify=True)
+
+        self.assertEqual(notifier.calls, 0)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+"""更新器测试：用固定 HTML 验证解析，不访问真实开奖网站。"""
+
 import unittest
 
 from dlt.updater import merge_draws, parse_history_html

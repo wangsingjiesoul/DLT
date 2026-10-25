@@ -8,25 +8,33 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <!-- 两个纯装饰背景层；aria 中不需要暴露它们。 -->
   <div class="ambient ambient-a"></div>
   <div class="ambient ambient-b"></div>
   <main class="shell">
+    <!-- 页头展示项目名称和当前历史数据同步状态。 -->
     <header class="topbar">
       <div><p class="eyebrow">DLT / SIGNAL LAB</p><h1>大乐透号码研究终端</h1></div>
       <div class="sync-pill" aria-live="polite">
         <i></i><span><b>数据已同步</b><small id="syncMeta">正在读取…</small></span><em>LIVE</em>
       </div>
     </header>
+    <!-- 风险提示始终可见，避免把统计评分误解成中奖概率。 -->
     <section class="notice" aria-label="风险提示">
       <span class="warning">!</span>
       <p>开奖是独立随机事件；候选组合来自历史统计，不改变任意单注的理论中奖概率。</p>
       <code>1 / 21,425,712</code>
     </section>
+    <!-- 左侧是三组候选，右侧解释当前选中组合的四个统计因子。 -->
     <section class="layout">
       <article class="panel predictions">
         <div class="section-head">
           <div><p class="eyebrow">NEXT DRAW / <span id="targetIssue">—</span></p><h2>模型候选组合</h2></div>
-          <div class="model-meta"><span id="targetDate">预计日期 —</span><span id="modelVersion">模型 —</span></div>
+          <div class="model-meta">
+            <span id="targetDate">预计日期 —</span>
+            <span id="modelVersion">统计模型 —</span>
+            <span id="aiStatus">AI 状态 —</span>
+          </div>
         </div>
         <div id="recommendations" class="recommendation-list" aria-live="polite"></div>
         <p class="fine-print">评分用于候选排序，不等同于中奖概率；生成过程保留受控随机抽样，避免伪精确。</p>
@@ -44,14 +52,16 @@
         <p class="fine-print">热号和遗漏只描述历史，不代表下一期更容易出现。</p>
       </aside>
     </section>
+    <!-- 用流程图帮助零基础用户理解后端从数据到推荐的处理顺序。 -->
     <section class="bottom-grid">
       <article class="panel pipeline">
         <p class="eyebrow">BACKEND PIPELINE</p>
         <div class="pipeline-row">
           <span>数据校验<small>去重 · 日期</small></span><b>→</b>
           <span>滚动特征<small>30 / 100 / 300</small></span><b>→</b>
-          <span>时间回测<small>隔离未来数据</small></span><b>→</b>
-          <span>约束采样<small>分区 · 奇偶</small></span><b>→</b>
+          <span>候选池<small>范围 · 结构</small></span><b>→</b>
+          <span>AI 重排<small>只选择候选 ID</small></span><b>→</b>
+          <span>本地复核<small>JSON · 合法性</small></span><b>→</b>
           <span class="pipeline-final">推荐<small>含解释</small></span>
         </div>
       </article>
@@ -63,6 +73,7 @@
     </section>
     <footer><span>统计研究用途 · 不构成投资或投注建议</span><span id="basedOn">数据截至 —</span></footer>
   </main>
+  <!-- defer 表示先解析 HTML，再执行脚本，避免脚本找不到页面元素。 -->
   <script src="/app.js" defer></script>
 </body>
 </html>

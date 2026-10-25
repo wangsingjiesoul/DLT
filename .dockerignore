@@ -1,13 +1,19 @@
-.git
-.gitignore
-.idea
-.venv
-__pycache__
-*.py[cod]
+# 构建镜像时不要复制本机密钥、Git 历史和运行时文件。
 .env
 .env.*
 !.env.example
-runtime
-tests
-design
-docs/plans
+.git
+.gitignore
+.idea/
+.vscode/
+runtime/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+
+# 测试和设计稿不影响线上运行，排除后镜像更小。
+tests/
+design/
+docs/plans/

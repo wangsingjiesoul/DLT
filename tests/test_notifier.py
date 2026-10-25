@@ -1,3 +1,5 @@
+"""通知测试：离线检查消息格式、请求载荷、返回值和凭证保护。"""
+
 import json
 import unittest
 from io import BytesIO
@@ -51,6 +53,14 @@ class NotifierTests(unittest.TestCase):
         self.assertIn("03 10 21 26 33", text)
         self.assertIn("26-122", text)
         self.assertNotIn("##", text)
+
+    def test_ai_status_and_reason_are_included(self):
+        prediction = dict(PREDICTION)
+        prediction["ai"] = {"enabled": True, "used": True, "model": "example-model"}
+        prediction["recommendations"] = [dict(PREDICTION["recommendations"][0], selection_reason="结构覆盖更均衡")]
+        text = format_prediction_text(prediction)
+        self.assertIn("AI 重排：已使用 example-model", text)
+        self.assertIn("AI 理由：结构覆盖更均衡", text)
 
     def test_qmsg_send_builds_json_payload(self):
         captured = {}

@@ -5,11 +5,14 @@
 - 2007 年至今的历史开奖号码；
 - 增量获取最新开奖结果；
 - 均衡、趋势、探索三类统计候选；
+- 通过 OpenAI-compatible 接口调用真实 AI 模型，对合法候选池进行受控重排；
 - 响应式网页和只读 JSON API；
 - 默认通过免费的 Qmsg酱向 QQ 发送候选号码；
 - 内置定时任务和 Docker 部署。
 
-> 开奖结果具有独立随机性。候选评分只用于历史统计和组合排序，不等同于中奖概率，也不承诺提高收益。
+> 开奖结果具有独立随机性。统计评分和 AI 重排都只用于候选排序，不等同于中奖概率，也不承诺提高收益。
+
+零基础读者建议先看 [零基础学习与部署指南](docs/beginner-guide.md)，再回到本页复制命令操作。
 
 ## 数据
 
@@ -59,6 +62,49 @@ python main.py backtest --rounds 30 --candidates 250
 # 运行测试
 python -m unittest discover -s tests -v
 ```
+
+## 接入真实 AI 模型
+
+项目支持 OpenAI `chat/completions` 形式的兼容接口。模型不会直接生成号码，完整流程是：
+
+```text
+历史开奖 → 本地统计特征 → 每种策略的合法候选池
+         → 外部 AI 只选择候选 ID → 本地二次校验 → 三组最终候选
+```
+
+先把 `.env.example` 复制为 `.env`，再填写你实际购买或部署的模型服务信息：
+
+```dotenv
+AI_ENABLED=true
+AI_REQUIRED=true
+AI_BASE_URL=https://你的服务商地址/v1
+AI_API_KEY=你的API密钥
+AI_MODEL=服务商提供的准确模型ID
+AI_TIMEOUT=30
+```
+
+- `AI_REQUIRED=true`：AI 请求、JSON 解析或候选校验失败时，本次预测直接失败，定时任务不会发送号码。
+- `AI_REQUIRED=false`：失败时回退为原统计排序，网页、API 和消息中会明确标记“已回退”。
+- 不要把 API Key 发到聊天、写进源码或提交到 Git；`.env` 和 Docker 构建上下文都已排除真实密钥。
+- Base URL 填到兼容 API 的版本根路径即可，例如末尾为 `/v1`；程序会自动追加 `/chat/completions`。
+
+验证是否真的调用了 AI：
+
+```bash
+python main.py predict
+```
+
+输出的 `ai` 字段应包含：
+
+```json
+{
+  "enabled": true,
+  "used": true,
+  "status": "selected"
+}
+```
+
+`predict`、`notify`、`run-once`、定时任务和 Web 首次生成预测时都会使用同一套 AI 配置。`backtest` 默认只测试确定性的统计层，避免产生大量 API 费用和不可复现结果。
 
 ## QQ 通知接入（默认、免费）
 
@@ -132,7 +178,7 @@ docker compose up -d --build
 docker compose logs -f dlt
 ```
 
-网页地址为 `http://服务器IP:8000`。
+网页端口由 `.env` 中的 `DLT_PORT` 决定；默认地址为 `http://服务器IP:8000`。
 
 定时任务默认开启，因此 Docker 部署必须配置所选渠道的凭证；默认是 `QMSG_KEY`。如果只想看网页、不发送消息，可在本地使用 `python main.py serve --no-scheduler`。
 
@@ -148,7 +194,8 @@ DLT_SCHEDULE_RETRY_MINUTES=10
 执行顺序：
 
 ```text
-获取最新开奖 → 校验并合并 → 生成下一期候选 → 保存结果 → 按期号去重发送
+获取最新开奖 → 校验并合并 → 生成统计候选池 → AI 重排并本地复核
+             → 保存结果 → 按“期号 + 渠道”去重发送
 ```
 
 如果开奖页在 `22:35` 尚未更新到当天数据，调度器不会发送旧预测，会默认每 10 分钟重试。如果数据源或通知接口失败，程序不会覆盖原有开奖数据，也不会把失败期号标记为已发送。
@@ -171,3 +218,20 @@ tests/      自动化测试
 web/        网页资源
 docs/       架构、ADR 和实施计划
 ```
+
+关键文件：
+
+- `dlt/data.py`：读取、校验和安全写入开奖 JSON。
+- `dlt/predictor.py`：统计特征、候选池、AI 选择约束和最终评分。
+- `dlt/ai.py`：OpenAI-compatible 请求、超时、响应限制和 JSON 解析。
+- `dlt/automation.py`：更新、预测、保存、通知去重和失败重试。
+- `main.py`：环境变量、命令行、定时器和各模块装配。
+
+## 学习顺序
+
+1. [零基础学习与部署指南](docs/beginner-guide.md)：先跑起来，再理解数据流。
+2. `dlt/data.py`：学习 JSON、函数、异常和数据校验。
+3. `dlt/predictor.py`：学习特征、随机种子、候选池和 AI 约束。
+4. `dlt/ai.py`：学习 HTTP 请求、JSON 响应和密钥保护。
+5. `dlt/automation.py` 与 `main.py`：学习如何把独立模块串成可部署服务。
+6. `tests/`：从测试名称反向理解每项功能为什么存在。

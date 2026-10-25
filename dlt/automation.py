@@ -12,6 +12,8 @@ from .updater import update_data
 
 
 class AutomationRunner:
+    """把更新、预测、保存和通知串成一次可重试的业务流程。"""
+
     def __init__(
         self,
         *,
@@ -23,6 +25,7 @@ class AutomationRunner:
         notifiers: list[Any] | None = None,
         load_func: Callable[[str | Path], list[dict[str, Any]]] = load_draws,
     ) -> None:
+        """依赖都可替换，既方便测试，也允许主程序注入带 AI 的预测函数。"""
         if notifier is not None and notifiers is not None:
             raise ValueError("notifier 和 notifiers 不能同时配置")
         self.data_path = Path(data_path)
@@ -36,11 +39,13 @@ class AutomationRunner:
 
     @staticmethod
     def _notifier_id(notifier: Any, index: int) -> str:
+        """给通知渠道一个稳定名称，用于记录哪个渠道已经成功。"""
         value = getattr(notifier, "notification_id", None)
         return str(value) if value else f"{notifier.__class__.__name__}:{index}"
 
     @staticmethod
     def _save_delivery_state(state: dict[str, Any], target_issue: str, sent_ids: set[str]) -> None:
+        """把某一期已成功的渠道写回状态字典。"""
         deliveries = state.get("notified_channels")
         if not isinstance(deliveries, dict):
             deliveries = {}
@@ -49,6 +54,7 @@ class AutomationRunner:
         state["notified_channels"] = dict(list(deliveries.items())[-20:])
 
     def _load_state(self) -> dict[str, Any]:
+        """读取运行状态；文件损坏时返回空状态，让后续流程可以重新尝试。"""
         if not self.state_path.exists():
             return {}
         try:
@@ -65,11 +71,13 @@ class AutomationRunner:
         force_notify: bool = False,
         expected_latest_date: str | None = None,
     ) -> dict[str, Any]:
+        """运行一个完整周期，任何预测异常都会在发送消息之前向上抛出。"""
         update_result = None
         if update:
             update_result = self.update_func(self.data_path)
         draws = self.load_func(self.data_path)
         prediction = self.predict_func(draws)
+        # 只有预测（包括严格模式下的 AI）成功后，才覆盖最近结果文件。
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.prediction_path, prediction)
         fresh = expected_latest_date is None or prediction.get("based_on_date") == expected_latest_date

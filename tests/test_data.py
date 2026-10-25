@@ -1,3 +1,5 @@
+"""数据层测试：保护号码校验和原子写入这两条最基础的安全边界。"""
+
 import json
 import tempfile
 import unittest

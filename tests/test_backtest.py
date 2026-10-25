@@ -1,3 +1,5 @@
+"""回测测试：确认滚动评估会同时给出统计模型和随机基线。"""
+
 import json
 import unittest
 from pathlib import Path

@@ -10,8 +10,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from time import sleep
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from dlt.ai import AIConfigError, OpenAICompatibleSelector
 from dlt.automation import AutomationRunner
 from dlt.backtest import run_backtest
 from dlt.data import load_draws, write_json_atomic
@@ -22,7 +24,7 @@ from dlt.notifier import (
     format_prediction_markdown,
     format_prediction_text,
 )
-from dlt.predictor import generate_prediction
+from dlt.predictor import generate_prediction, prediction_profile
 from dlt.updater import update_data
 from dlt.web import serve
 
@@ -32,6 +34,9 @@ DATA_PATH = ROOT / "data" / "dlt.json"
 RUNTIME_DIR = ROOT / "runtime"
 WEB_ROOT = ROOT / "web"
 LOG = logging.getLogger("dlt")
+
+# 这个类型别名表示“输入开奖列表，输出预测字典”的函数，便于初学者理解依赖注入。
+PredictFunction = Callable[[list[dict[str, Any]]], dict[str, Any]]
 
 
 def load_env_file(path: Path = ROOT / ".env") -> None:
@@ -49,7 +54,52 @@ def load_env_file(path: Path = ROOT / ".env") -> None:
             os.environ.setdefault(key, value)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """把环境变量中的 true/false 文本转换成 Python 布尔值。"""
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    value = raw_value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise AIConfigError(f"{name} 必须填写 true 或 false")
+
+
+def build_ai_selector() -> tuple[OpenAICompatibleSelector | None, bool]:
+    """从环境变量构造 AI 客户端；密钥只在内存中使用。"""
+    enabled = _env_flag("AI_ENABLED")
+    required = _env_flag("AI_REQUIRED")
+    if required and not enabled:
+        raise AIConfigError("AI_REQUIRED=true 时必须同时设置 AI_ENABLED=true")
+    if not enabled:
+        return None, False
+    try:
+        timeout = int(os.getenv("AI_TIMEOUT", "30"))
+    except ValueError as exc:
+        raise AIConfigError("AI_TIMEOUT 必须是整数秒") from exc
+    selector = OpenAICompatibleSelector(
+        base_url=os.getenv("AI_BASE_URL", "https://api.openai.com/v1"),
+        api_key=os.getenv("AI_API_KEY", ""),
+        model=os.getenv("AI_MODEL", ""),
+        timeout=timeout,
+    )
+    return selector, required
+
+
+def build_predict_function() -> tuple[PredictFunction, str]:
+    """把 AI 配置封装进预测函数，供 CLI、定时器和 Web 共同复用。"""
+    selector, required = build_ai_selector()
+
+    def predict(draws: list[dict[str, Any]]) -> dict[str, Any]:
+        return generate_prediction(draws, ai_selector=selector, ai_required=required)
+
+    return predict, prediction_profile(selector, required)
+
+
 def notification_provider() -> str:
+    """确定使用哪个通知服务，并兼容旧版“根据已配置密钥自动判断”。"""
     provider = os.getenv("NOTIFY_PROVIDER", "").strip().lower()
     if not provider:
         if os.getenv("QMSG_KEY", "").strip():
@@ -64,6 +114,7 @@ def notification_provider() -> str:
 
 
 def build_notifiers(required: bool = False) -> list[QmsgNotifier | PushPlusNotifier]:
+    """根据环境变量构造一个或多个通知器。"""
     provider = notification_provider()
 
     if provider == "qmsg":
@@ -99,15 +150,20 @@ def build_notifiers(required: bool = False) -> list[QmsgNotifier | PushPlusNotif
     raise AssertionError("unreachable")
 
 
-def build_runner(*, notifier_required: bool = False) -> AutomationRunner:
+def build_runner(*, notifier_required: bool = False, predict_func: PredictFunction | None = None) -> AutomationRunner:
+    """组装自动化流程；Web、手动执行和定时任务都复用它。"""
+    if predict_func is None:
+        predict_func, _profile = build_predict_function()
     return AutomationRunner(
         data_path=DATA_PATH,
         runtime_dir=RUNTIME_DIR,
         notifiers=build_notifiers(required=notifier_required),
+        predict_func=predict_func,
     )
 
 
 def _schedule_config() -> tuple[int, int, set[int]]:
+    """解析每天执行时刻和开奖星期，发现错误时尽早停止启动。"""
     raw_time = os.getenv("DLT_SCHEDULE_TIME", "22:35")
     try:
         hour_text, minute_text = raw_time.split(":", 1)
@@ -123,11 +179,13 @@ def _schedule_config() -> tuple[int, int, set[int]]:
 
 
 def start_scheduler(runner: AutomationRunner) -> threading.Thread:
+    """在后台线程中按北京时间触发更新；数据未发布时按间隔重试。"""
     hour, minute, weekdays = _schedule_config()
     timezone = ZoneInfo(os.getenv("DLT_TIMEZONE", "Asia/Shanghai"))
     retry_minutes = max(1, int(os.getenv("DLT_SCHEDULE_RETRY_MINUTES", "10")))
 
     def loop() -> None:
+        # 这些变量只存在内存中；真正的通知去重状态由 AutomationRunner 落盘。
         last_success_date = None
         last_attempt_at = None
         LOG.info(
@@ -161,20 +219,25 @@ def start_scheduler(runner: AutomationRunner) -> threading.Thread:
 
 
 def command_update(_args: argparse.Namespace) -> int:
+    """CLI：只更新历史开奖文件。"""
     result = update_data(DATA_PATH)
     print(json.dumps({key: value for key, value in result.items() if key != "draws"}, ensure_ascii=False, indent=2))
     return 0
 
 
 def command_predict(_args: argparse.Namespace) -> int:
-    prediction = generate_prediction(load_draws(DATA_PATH))
+    """CLI：生成当前配置对应的预测并保存。"""
+    predict_func, _profile = build_predict_function()
+    prediction = predict_func(load_draws(DATA_PATH))
     write_json_atomic(RUNTIME_DIR / "latest_prediction.json", prediction)
     print(json.dumps(prediction, ensure_ascii=False, indent=2))
     return 0
 
 
 def command_notify(args: argparse.Namespace) -> int:
-    prediction = generate_prediction(load_draws(DATA_PATH))
+    """CLI：生成预测并立即发送；dry-run 只展示消息文本。"""
+    predict_func, _profile = build_predict_function()
+    prediction = predict_func(load_draws(DATA_PATH))
     if args.dry_run:
         formatter = format_prediction_text if notification_provider() == "qmsg" else format_prediction_markdown
         print(formatter(prediction))
@@ -185,6 +248,7 @@ def command_notify(args: argparse.Namespace) -> int:
 
 
 def command_run_once(args: argparse.Namespace) -> int:
+    """CLI：手动执行与定时器相同的一次完整周期。"""
     runner = build_runner(notifier_required=args.notify)
     result = runner.run(update=not args.no_update, notify=args.notify, force_notify=args.force_notify)
     output = {
@@ -192,6 +256,7 @@ def command_run_once(args: argparse.Namespace) -> int:
         "based_on_issue": result["prediction"]["based_on_issue"],
         "notified": result["notified"],
         "notified_channels": result["notified_channels"],
+        "ai": result["prediction"].get("ai"),
         "update": {key: value for key, value in (result["update"] or {}).items() if key != "draws"},
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -199,21 +264,33 @@ def command_run_once(args: argparse.Namespace) -> int:
 
 
 def command_backtest(args: argparse.Namespace) -> int:
+    """CLI：运行不调用外部 AI 的统计层滚动回测。"""
     result = run_backtest(load_draws(DATA_PATH), rounds=args.rounds, candidate_count=args.candidates)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
 def command_serve(args: argparse.Namespace) -> int:
+    """CLI：启动网页/API，并按参数决定是否同时启动定时器。"""
     # 启用调度器就必须配置通知渠道，避免服务看似正常运行、实际无人收到消息。
-    runner = build_runner(notifier_required=not args.no_scheduler)
+    predict_func, profile = build_predict_function()
+    runner = build_runner(notifier_required=not args.no_scheduler, predict_func=predict_func)
     if not args.no_scheduler:
         start_scheduler(runner)
-    serve(host=args.host, port=args.port, data_path=DATA_PATH, runtime_dir=RUNTIME_DIR, web_root=WEB_ROOT)
+    serve(
+        host=args.host,
+        port=args.port,
+        data_path=DATA_PATH,
+        runtime_dir=RUNTIME_DIR,
+        web_root=WEB_ROOT,
+        predict_func=predict_func,
+        prediction_profile=profile,
+    )
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """声明所有子命令和参数，argparse 会自动生成 --help。"""
     parser = argparse.ArgumentParser(description="大乐透历史数据、候选推荐和通知服务")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -247,6 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """程序入口：读取配置、初始化日志、解析命令并统一处理可预期错误。"""
     load_env_file()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = build_parser().parse_args()

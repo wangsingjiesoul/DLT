@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from .data import ISSUE_RE, load_draws, validate_draw, validate_draws, write_json_atomic
 
 
+# 当前数据源是第三方历史页面，不是中国体育彩票官方 API；写入前必须严格校验。
 HISTORY_URL = "https://datachart.500.com/dlt/history/newinc/history.php?start={start}&end=99999"
 MAX_RESPONSE_BYTES = 2_000_000
 
@@ -21,6 +22,7 @@ class UpdateError(RuntimeError):
 
 
 def _plain_text(fragment: str) -> str:
+    """移除简单 HTML 标签，并把 &nbsp; 等实体还原为普通文本。"""
     return html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
 
 
@@ -58,12 +60,14 @@ def parse_history_html(document: str) -> list[dict[str, Any]]:
 
 
 def merge_draws(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按期号合并新旧记录；同一期的新记录会覆盖旧记录，然后整体复核。"""
     merged = {draw["issue"]: draw for draw in existing}
     merged.update({draw["issue"]: draw for draw in incoming})
     return validate_draws(list(merged.values()))
 
 
 def _decode_response(response: Any, payload: bytes) -> str:
+    """优先使用响应声明的编码，并兼容常见中文页面编码。"""
     charset = None
     headers = getattr(response, "headers", None)
     if headers is not None and hasattr(headers, "get_content_charset"):
@@ -79,6 +83,7 @@ def _decode_response(response: Any, payload: bytes) -> str:
 
 
 def fetch_history(start_issue: str, *, opener: Callable[..., Any] = urlopen, timeout: int = 25) -> list[dict[str, Any]]:
+    """从指定期号开始获取历史页面，并限制等待时间和最大响应体。"""
     if not ISSUE_RE.fullmatch(start_issue):
         raise UpdateError("起始期号格式无效")
     request = Request(
@@ -104,6 +109,7 @@ def fetch_history(start_issue: str, *, opener: Callable[..., Any] = urlopen, tim
 
 
 def update_data(path: str | Path, *, opener: Callable[..., Any] = urlopen) -> dict[str, Any]:
+    """执行一次增量更新；只有确实新增记录时才改写数据文件。"""
     data_path = Path(path)
     existing = load_draws(data_path)
     incoming = fetch_history(existing[0]["issue"], opener=opener)

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
+# 统一把期号保存为 5 位字符串、号码保存为 2 位字符串，避免数字 01 被变成 1。
 ISSUE_RE = re.compile(r"^\d{5}$")
 NUMBER_RE = re.compile(r"^\d{2}$")
 
@@ -20,6 +21,7 @@ class DataValidationError(ValueError):
 
 
 def _validate_numbers(values: Any, *, count: int, minimum: int, maximum: int, field: str) -> list[str]:
+    """校验前区或后区号码的数量、格式、范围、去重和顺序。"""
     if not isinstance(values, list) or len(values) != count:
         raise DataValidationError(f"{field} 必须包含 {count} 个号码")
     if not all(isinstance(item, str) and NUMBER_RE.fullmatch(item) for item in values):
@@ -58,6 +60,7 @@ def validate_draw(draw: Any) -> dict[str, Any]:
 
 
 def validate_draws(draws: Any) -> list[dict[str, Any]]:
+    """校验整份历史数据，去除多余字段，并统一按最新日期在前排序。"""
     if not isinstance(draws, list) or not draws:
         raise DataValidationError("开奖数据必须是非空数组")
     normalized = [validate_draw(draw) for draw in draws]
@@ -72,6 +75,7 @@ def validate_draws(draws: Any) -> list[dict[str, Any]]:
 
 
 def load_draws(path: str | Path) -> list[dict[str, Any]]:
+    """从 UTF-8 JSON 文件读取数据；读取后仍要校验，不能盲目信任磁盘内容。"""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     return validate_draws(data)
 

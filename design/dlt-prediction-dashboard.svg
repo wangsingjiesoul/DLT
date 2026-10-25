@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- 早期静态界面原型；真实网页位于 web/，此文件仅用于对照视觉设计。 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" role="img" aria-labelledby="title desc">
   <title id="title">大乐透信号实验室预测界面原型</title>
   <desc id="desc">展示三组大乐透模型候选号码、统计解释、回测基线和理性购彩提示的深色数据仪表盘。</desc>
