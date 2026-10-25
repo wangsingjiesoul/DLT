@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs and local output
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
