@@ -61,6 +61,9 @@ python main.py backtest --rounds 30 --candidates 250
 
 # 运行测试
 python -m unittest discover -s tests -v
+
+# 配置 AI 后，真实调用一次模型进行安全检查；不会发送通知
+python main.py ai-check
 ```
 
 ## 接入真实 AI 模型
@@ -88,23 +91,28 @@ AI_TIMEOUT=30
 - 不要把 API Key 发到聊天、写进源码或提交到 Git；`.env` 和 Docker 构建上下文都已排除真实密钥。
 - Base URL 填到兼容 API 的版本根路径即可，例如末尾为 `/v1`；程序会自动追加 `/chat/completions`。
 
-验证是否真的调用了 AI：
+验证是否真的调用了 AI，并确认返回值能通过候选 ID 校验：
 
 ```bash
-python main.py predict
+python main.py ai-check
 ```
 
-输出的 `ai` 字段应包含：
+成功输出应包含：
 
 ```json
 {
-  "enabled": true,
+  "ok": true,
   "used": true,
-  "status": "selected"
+  "status": "selected",
+  "recommendation_count": 3
 }
 ```
 
+这个命令不更新开奖数据、不保存预测，也不发送 QQ/微信消息；它会强制使用严格模式，任何统计回退都会被判定为检查失败。
+
 `predict`、`notify`、`run-once`、定时任务和 Web 首次生成预测时都会使用同一套 AI 配置。`backtest` 默认只测试确定性的统计层，避免产生大量 API 费用和不可复现结果。
+
+Web 会把同一期、同一模型配置的结果缓存到 `runtime/latest_prediction.json`。多个并发页面请求只会触发一次生成；如果非严格模式发生统计回退，网页会在 10 分钟冷却期后自动重新尝试 AI，避免每次刷新都重复消耗接口额度。
 
 ## QQ 通知接入（默认、免费）
 

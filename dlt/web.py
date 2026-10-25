@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +18,10 @@ from .predictor import generate_prediction, prediction_profile
 
 # 默认值对应“未启用 AI”的统计模式；主程序启用 AI 后会显式传入另一个标识。
 DEFAULT_PREDICTION_PROFILE = prediction_profile()
+DEFAULT_AI_FALLBACK_RETRY_SECONDS = 600
+
+# ThreadingHTTPServer 会并发处理请求。用一把进程内锁避免缓存未生成时重复调用付费 AI。
+_PREDICTION_LOCK = threading.Lock()
 
 
 def security_headers() -> list[tuple[str, str]]:
@@ -50,26 +56,47 @@ def _read_prediction(
     *,
     predict_func: Callable[[list[dict[str, Any]]], dict[str, Any]] = generate_prediction,
     expected_profile: str = DEFAULT_PREDICTION_PROFILE,
+    fallback_retry_seconds: int = DEFAULT_AI_FALLBACK_RETRY_SECONDS,
 ) -> dict[str, Any]:
     """优先读取同一期、同一模型配置的缓存，否则重新生成预测。"""
+    if fallback_retry_seconds < 0:
+        raise ValueError("fallback_retry_seconds 不能小于 0")
+
+    def cached_value(prediction_path: Path, latest_issue: str) -> dict[str, Any] | None:
+        if not prediction_path.exists():
+            return None
+        try:
+            value = json.loads(prediction_path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                return None
+            # 数据或模型配置变化时不能继续使用旧缓存。
+            if value.get("based_on_issue") != latest_issue or value.get("generation_profile") != expected_profile:
+                return None
+            ai = value.get("ai")
+            if isinstance(ai, dict) and ai.get("status") == "fallback":
+                # 回退结果只短暂缓存，冷却结束后重新尝试外部 AI。
+                age_seconds = max(0.0, time.time() - prediction_path.stat().st_mtime)
+                if age_seconds >= fallback_retry_seconds:
+                    return None
+            return value
+        except (OSError, json.JSONDecodeError):
+            return None
+
     draws = load_draws(data_path)
     latest_issue = draws[0]["issue"]
     prediction_path = runtime_dir / "latest_prediction.json"
-    if prediction_path.exists():
-        try:
-            value = json.loads(prediction_path.read_text(encoding="utf-8"))
-            # 数据由 CLI 单独更新时，不能继续向页面返回基于旧期号的缓存。
-            if (
-                isinstance(value, dict)
-                and value.get("based_on_issue") == latest_issue
-                and value.get("generation_profile") == expected_profile
-            ):
-                return value
-        except (OSError, json.JSONDecodeError):
-            pass
-    prediction = predict_func(draws)
-    write_json_atomic(prediction_path, prediction)
-    return prediction
+    value = cached_value(prediction_path, latest_issue)
+    if value is not None:
+        return value
+
+    with _PREDICTION_LOCK:
+        # 等待锁期间另一个请求可能已经生成了缓存，所以进入锁后必须再次检查。
+        value = cached_value(prediction_path, latest_issue)
+        if value is not None:
+            return value
+        prediction = predict_func(draws)
+        write_json_atomic(prediction_path, prediction)
+        return prediction
 
 
 def create_handler(

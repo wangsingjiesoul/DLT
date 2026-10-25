@@ -170,18 +170,18 @@ AI_TIMEOUT=30
 ### 6.3 验证真实调用
 
 ```powershell
-python main.py predict
+python main.py ai-check
 ```
 
-成功时应该看到：
+`ai-check` 不更新开奖、不保存预测，也不会发送 QQ/微信。它只进行一次严格的真实模型调用。成功时应该看到：
 
 ```json
-"ai": {
-  "enabled": true,
+{
+  "ok": true,
   "used": true,
-  "required": true,
   "model": "你的模型ID",
-  "status": "selected"
+  "status": "selected",
+  "recommendation_count": 3
 }
 ```
 
@@ -314,6 +314,7 @@ python main.py notify
 | `python main.py run-once` | 更新并预测，不通知 | 按配置 |
 | `python main.py run-once --notify` | 更新、预测、通知 | 按配置 |
 | `python main.py backtest` | 滚动回测统计层 | 否 |
+| `python main.py ai-check` | 严格验证一次真实 AI 调用，不发送通知 | 是 |
 | `python main.py serve --no-scheduler` | 只启动网页 | 缓存失效时按配置 |
 | `python main.py serve` | 网页 + 定时任务 | 按配置 |
 
@@ -327,6 +328,8 @@ python main.py notify
 - `/api/history/latest?limit=10`：最近 10 条开奖。
 
 Web 只开放 GET 和 HEAD，不提供远程“立即发送”或“更新数据”按钮，避免公网部署后被其他人滥用你的模型额度和通知额度。
+
+Web 使用进程内锁保护预测缓存：首次有多个浏览器同时访问时，只允许一个请求调用模型，其他请求等待并复用结果。如果回退模式遇到 AI 故障，回退结果会缓存 10 分钟，然后页面再尝试一次 AI；这样既能自动恢复，又不会因反复刷新快速消耗额度。
 
 ## 12. 定时任务
 

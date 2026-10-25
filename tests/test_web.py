@@ -1,7 +1,10 @@
 """Web 测试：保护路径安全、响应头和不同模型配置的缓存隔离。"""
 
 import json
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -76,6 +79,112 @@ class WebTests(unittest.TestCase):
 
             self.assertEqual(prediction["target_issue"], "new")
             self.assertEqual(len(calls), 1)
+
+    def test_recent_ai_fallback_cache_is_reused_during_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_path = root / "dlt.json"
+            runtime_dir = root / "runtime"
+            runtime_dir.mkdir()
+            draws = json.loads(Path("data/dlt.json").read_text(encoding="utf-8"))
+            data_path.write_text(json.dumps(draws, ensure_ascii=False), encoding="utf-8")
+            cached = {
+                "based_on_issue": draws[0]["issue"],
+                "target_issue": "fallback-cache",
+                "generation_profile": "ai-profile",
+                "ai": {"status": "fallback"},
+            }
+            (runtime_dir / "latest_prediction.json").write_text(json.dumps(cached), encoding="utf-8")
+
+            prediction = _read_prediction(
+                data_path,
+                runtime_dir,
+                predict_func=lambda _draws: self.fail("冷却期内不应重新调用 AI"),
+                expected_profile="ai-profile",
+                fallback_retry_seconds=600,
+            )
+
+            self.assertEqual(prediction["target_issue"], "fallback-cache")
+
+    def test_expired_ai_fallback_cache_retries_prediction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_path = root / "dlt.json"
+            runtime_dir = root / "runtime"
+            runtime_dir.mkdir()
+            draws = json.loads(Path("data/dlt.json").read_text(encoding="utf-8"))
+            data_path.write_text(json.dumps(draws, ensure_ascii=False), encoding="utf-8")
+            prediction_path = runtime_dir / "latest_prediction.json"
+            prediction_path.write_text(
+                json.dumps(
+                    {
+                        "based_on_issue": draws[0]["issue"],
+                        "target_issue": "expired-fallback",
+                        "generation_profile": "ai-profile",
+                        "ai": {"status": "fallback"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            expired = time.time() - 700
+            os.utime(prediction_path, (expired, expired))
+
+            prediction = _read_prediction(
+                data_path,
+                runtime_dir,
+                predict_func=lambda _draws: {
+                    "based_on_issue": draws[0]["issue"],
+                    "target_issue": "retried",
+                    "generation_profile": "ai-profile",
+                    "ai": {"status": "selected"},
+                },
+                expected_profile="ai-profile",
+                fallback_retry_seconds=600,
+            )
+
+            self.assertEqual(prediction["target_issue"], "retried")
+
+    def test_concurrent_cache_miss_only_generates_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_path = root / "dlt.json"
+            runtime_dir = root / "runtime"
+            runtime_dir.mkdir()
+            draws = json.loads(Path("data/dlt.json").read_text(encoding="utf-8"))
+            data_path.write_text(json.dumps(draws, ensure_ascii=False), encoding="utf-8")
+            calls = []
+
+            def predict(_draws):
+                calls.append(True)
+                time.sleep(0.05)
+                return {
+                    "based_on_issue": draws[0]["issue"],
+                    "target_issue": "single-call",
+                    "generation_profile": "concurrent-profile",
+                    "ai": {"status": "selected"},
+                }
+
+            results = []
+
+            def read():
+                results.append(
+                    _read_prediction(
+                        data_path,
+                        runtime_dir,
+                        predict_func=predict,
+                        expected_profile="concurrent-profile",
+                    )
+                )
+
+            threads = [threading.Thread(target=read) for _ in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(results), 4)
+            self.assertTrue(all(item["target_issue"] == "single-call" for item in results))
 
 
 if __name__ == "__main__":

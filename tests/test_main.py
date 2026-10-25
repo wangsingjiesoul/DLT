@@ -2,6 +2,7 @@
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import main
@@ -52,6 +53,43 @@ class MainAIConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"AI_REQUIRED": "true"}, clear=True):
             with self.assertRaisesRegex(ValueError, "AI_ENABLED=true"):
                 main.build_ai_selector()
+
+
+class MainAIConnectivityCheckTests(unittest.TestCase):
+    """检查命令必须真实要求 AI 成功，同时不能触发任何通知逻辑。"""
+
+    def test_ai_check_requires_ai_to_be_enabled(self):
+        with patch("main.build_ai_selector", return_value=(None, False)):
+            with self.assertRaisesRegex(ValueError, "AI 尚未启用"):
+                main.command_ai_check(SimpleNamespace(candidates=300))
+
+    def test_ai_check_forces_strict_mode_and_prints_safe_summary(self):
+        selector = object()
+        prediction = {
+            "target_issue": "26122",
+            "recommendations": [{}, {}, {}],
+            "ai": {"used": True, "status": "selected", "model": "example-model"},
+        }
+        with (
+            patch("main.build_ai_selector", return_value=(selector, False)),
+            patch("main.load_draws", return_value=[{"issue": "26121"}]),
+            patch("main.generate_prediction", return_value=prediction) as generate,
+            patch("builtins.print") as output,
+            patch("main.build_notifiers", side_effect=AssertionError("不应创建通知器")),
+        ):
+            result = main.command_ai_check(SimpleNamespace(candidates=300))
+
+        self.assertEqual(result, 0)
+        self.assertTrue(generate.call_args.kwargs["ai_required"])
+        self.assertEqual(generate.call_args.kwargs["candidate_count"], 300)
+        printed = output.call_args.args[0]
+        self.assertIn('"ok": true', printed)
+        self.assertIn("没有发送任何通知", printed)
+
+    def test_ai_check_rejects_invalid_candidate_count(self):
+        with patch("main.build_ai_selector", return_value=(object(), True)):
+            with self.assertRaisesRegex(ValueError, "100 到 5000"):
+                main.command_ai_check(SimpleNamespace(candidates=10))
 
 
 if __name__ == "__main__":

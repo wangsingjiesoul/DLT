@@ -13,7 +13,7 @@ from time import sleep
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from dlt.ai import AIConfigError, OpenAICompatibleSelector
+from dlt.ai import AIConfigError, AISelectionError, OpenAICompatibleSelector
 from dlt.automation import AutomationRunner
 from dlt.backtest import run_backtest
 from dlt.data import load_draws, write_json_atomic
@@ -270,6 +270,42 @@ def command_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_ai_check(args: argparse.Namespace) -> int:
+    """CLI：进行一次严格的真实 AI 调用，但不更新数据、不保存结果、不发送通知。"""
+    selector, _configured_required = build_ai_selector()
+    if selector is None:
+        raise AIConfigError("AI 尚未启用：请先在 .env 中配置 AI_ENABLED=true 及模型参数")
+    if not 100 <= args.candidates <= 5_000:
+        raise ValueError("--candidates 必须在 100 到 5000 之间")
+
+    # 连通性检查始终强制严格模式，绝不把统计回退误报成 AI 调用成功。
+    prediction = generate_prediction(
+        load_draws(DATA_PATH),
+        candidate_count=args.candidates,
+        ai_selector=selector,
+        ai_required=True,
+    )
+    ai_status = prediction.get("ai")
+    if not isinstance(ai_status, dict) or not ai_status.get("used") or ai_status.get("status") != "selected":
+        raise AISelectionError("AI 连通性检查未通过")
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "model": ai_status.get("model"),
+                "target_issue": prediction.get("target_issue"),
+                "used": ai_status.get("used"),
+                "status": ai_status.get("status"),
+                "recommendation_count": len(prediction.get("recommendations", [])),
+                "notice": "AI 已完成真实候选重排；本命令没有发送任何通知。",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_serve(args: argparse.Namespace) -> int:
     """CLI：启动网页/API，并按参数决定是否同时启动定时器。"""
     # 启用调度器就必须配置通知渠道，避免服务看似正常运行、实际无人收到消息。
@@ -314,6 +350,10 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--rounds", type=int, default=30, help="回测最近多少期")
     backtest_parser.add_argument("--candidates", type=int, default=250, help="每种策略生成的候选数")
     backtest_parser.set_defaults(handler=command_backtest)
+
+    ai_check_parser = subparsers.add_parser("ai-check", help="真实调用一次 AI，安全检查配置和候选重排")
+    ai_check_parser.add_argument("--candidates", type=int, default=300, help="每种策略的本地候选抽样次数")
+    ai_check_parser.set_defaults(handler=command_ai_check)
 
     serve_parser = subparsers.add_parser("serve", help="启动网页、API 和定时任务")
     serve_parser.add_argument("--host", default=os.getenv("DLT_HOST", "127.0.0.1"))
