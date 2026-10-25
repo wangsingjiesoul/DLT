@@ -5,6 +5,9 @@ services:
     ports:
       - "${DLT_PORT:-8000}:8000"
     environment:
+      NOTIFY_PROVIDER: "${NOTIFY_PROVIDER:-}"
+      QMSG_KEY: "${QMSG_KEY:-}"
+      QMSG_GROUP: "${QMSG_GROUP:-}"
       PUSHPLUS_TOKEN: "${PUSHPLUS_TOKEN:-}"
       PUSHPLUS_CHANNEL: "${PUSHPLUS_CHANNEL:-wechat}"
       PUSHPLUS_TOPIC: "${PUSHPLUS_TOPIC:-}"

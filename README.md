@@ -6,7 +6,7 @@
 - 增量获取最新开奖结果；
 - 均衡、趋势、探索三类统计候选；
 - 响应式网页和只读 JSON API；
-- 通过 PushPlus 向微信或 QQ 发送候选号码；
+- 默认通过免费的 Qmsg酱向 QQ 发送候选号码；
 - 内置定时任务和 Docker 部署。
 
 > 开奖结果具有独立随机性。候选评分只用于历史统计和组合排序，不等同于中奖概率，也不承诺提高收益。
@@ -60,16 +60,16 @@ python main.py backtest --rounds 30 --candidates 250
 python -m unittest discover -s tests -v
 ```
 
-## 微信或 QQ 接入
+## QQ 通知接入（默认、免费）
 
-本项目默认使用 PushPlus。推荐优先使用微信：绑定公众号后只需要 Token，配置最少；QQ 也支持，但发送到 QQ 群时还需要渠道配置编码。
+项目默认使用 Qmsg酱发送 QQ 消息，不要求购买会员或付费实名认证。PushPlus 适配器仍保留，但不再作为默认方案。
 
-### 1. 获取 Token
+### 1. 获取 Qmsg Key
 
-1. 登录 PushPlus。
-2. 关注其微信公众号并完成账号绑定。
-3. 在“发送消息”页面复制个人 Token。
-4. 如使用 QQ，在 PushPlus 渠道配置中完成 QQ 机器人或好友配置。
+1. 使用 QQ 登录 Qmsg酱控制台。
+2. 复制控制台生成的 Key。
+3. 添加控制台提供的 Qmsg酱机器人为 QQ 好友。
+4. 向机器人发送一次自己的 Key，完成单聊绑定。
 
 ### 2. 配置环境变量
 
@@ -88,17 +88,18 @@ Copy-Item .env.example .env
 编辑 `.env`：
 
 ```dotenv
-PUSHPLUS_TOKEN=你的真实Token
-PUSHPLUS_CHANNEL=wechat
+NOTIFY_PROVIDER=qmsg
+QMSG_KEY=你的QmsgKey
+QMSG_GROUP=
 ```
 
-- 发到微信：`PUSHPLUS_CHANNEL=wechat`
-- QQ 默认机器人发给自己：只填 `PUSHPLUS_CHANNEL=qq`，`PUSHPLUS_OPTION` 留空
-- QQ 群或指定机器人：填写 `PUSHPLUS_OPTION`（PushPlus 的渠道配置编码），并让 `PUSHPLUS_TOPIC`、`PUSHPLUS_TO` 保持为空
-- 好友消息使用 `PUSHPLUS_TO` 填好友令牌；它不是 QQ 号
-- 使用 PushPlus 一对多群组功能时填写 `PUSHPLUS_TOPIC`
+- 发到绑定的 QQ 单聊：让 `QMSG_GROUP` 保持为空。
+- 发到 QQ 群：完成 Qmsg 群绑定后，将群号填入 `QMSG_GROUP`。
+- `QMSG_KEY` 是通知凭证，不要发给别人。
 
-`.env` 已被 Git 忽略，真实 Token 不会进入仓库。
+`.env` 已被 Git 忽略，真实 Key 不会进入仓库。
+
+如已有可用的 PushPlus 配置，可将 `NOTIFY_PROVIDER` 改为 `pushplus`，并继续使用 `PUSHPLUS_*` 环境变量。
 
 ### 3. 测试消息
 
@@ -123,7 +124,7 @@ docker compose logs -f dlt
 
 网页地址为 `http://服务器IP:8000`。
 
-定时任务默认开启，因此 Docker 部署必须配置 `PUSHPLUS_TOKEN`；如果只想看网页、不发送消息，可在本地使用 `python main.py serve --no-scheduler`。
+定时任务默认开启，因此 Docker 部署必须配置所选渠道的凭证；默认是 `QMSG_KEY`。如果只想看网页、不发送消息，可在本地使用 `python main.py serve --no-scheduler`。
 
 默认自动任务：北京时间每周一、周三、周六 `22:35` 执行。
 

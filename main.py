@@ -15,7 +15,13 @@ from zoneinfo import ZoneInfo
 from dlt.automation import AutomationRunner
 from dlt.backtest import run_backtest
 from dlt.data import load_draws, write_json_atomic
-from dlt.notifier import NotificationConfigError, PushPlusNotifier, format_prediction_markdown
+from dlt.notifier import (
+    NotificationConfigError,
+    PushPlusNotifier,
+    QmsgNotifier,
+    format_prediction_markdown,
+    format_prediction_text,
+)
 from dlt.predictor import generate_prediction
 from dlt.updater import update_data
 from dlt.web import serve
@@ -43,19 +49,46 @@ def load_env_file(path: Path = ROOT / ".env") -> None:
             os.environ.setdefault(key, value)
 
 
-def build_notifier(required: bool = False) -> PushPlusNotifier | None:
-    token = os.getenv("PUSHPLUS_TOKEN", "").strip()
-    if not token:
-        if required:
-            raise NotificationConfigError("请先配置 PUSHPLUS_TOKEN")
-        return None
-    return PushPlusNotifier(
-        token,
-        channel=os.getenv("PUSHPLUS_CHANNEL", "wechat"),
-        topic=os.getenv("PUSHPLUS_TOPIC") or None,
-        recipient=os.getenv("PUSHPLUS_TO") or None,
-        option=os.getenv("PUSHPLUS_OPTION") or None,
-    )
+def notification_provider() -> str:
+    provider = os.getenv("NOTIFY_PROVIDER", "").strip().lower()
+    if not provider:
+        if os.getenv("QMSG_KEY", "").strip():
+            provider = "qmsg"
+        elif os.getenv("PUSHPLUS_TOKEN", "").strip():
+            provider = "pushplus"
+        else:
+            provider = "qmsg"
+    if provider not in {"qmsg", "pushplus"}:
+        raise NotificationConfigError("NOTIFY_PROVIDER 仅支持 qmsg 或 pushplus")
+    return provider
+
+
+def build_notifier(required: bool = False) -> QmsgNotifier | PushPlusNotifier | None:
+    provider = notification_provider()
+
+    if provider == "qmsg":
+        key = os.getenv("QMSG_KEY", "").strip()
+        if not key:
+            if required:
+                raise NotificationConfigError("请先配置 QMSG_KEY")
+            return None
+        return QmsgNotifier(key, group=os.getenv("QMSG_GROUP") or None)
+
+    if provider == "pushplus":
+        token = os.getenv("PUSHPLUS_TOKEN", "").strip()
+        if not token:
+            if required:
+                raise NotificationConfigError("请先配置 PUSHPLUS_TOKEN")
+            return None
+        return PushPlusNotifier(
+            token,
+            channel=os.getenv("PUSHPLUS_CHANNEL", "wechat"),
+            topic=os.getenv("PUSHPLUS_TOPIC") or None,
+            recipient=os.getenv("PUSHPLUS_TO") or None,
+            option=os.getenv("PUSHPLUS_OPTION") or None,
+        )
+
+    raise AssertionError("unreachable")
 
 
 def build_runner(*, notifier_required: bool = False) -> AutomationRunner:
@@ -135,7 +168,8 @@ def command_predict(_args: argparse.Namespace) -> int:
 def command_notify(args: argparse.Namespace) -> int:
     prediction = generate_prediction(load_draws(DATA_PATH))
     if args.dry_run:
-        print(format_prediction_markdown(prediction))
+        formatter = format_prediction_text if notification_provider() == "qmsg" else format_prediction_markdown
+        print(formatter(prediction))
         return 0
     notifier = build_notifier(required=True)
     assert notifier is not None
@@ -182,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     predict_parser = subparsers.add_parser("predict", help="生成并保存下一期候选")
     predict_parser.set_defaults(handler=command_predict)
 
-    notify_parser = subparsers.add_parser("notify", help="向 PushPlus 发送当前候选")
+    notify_parser = subparsers.add_parser("notify", help="通过已配置渠道发送当前候选")
     notify_parser.add_argument("--dry-run", action="store_true", help="只打印消息，不发送")
     notify_parser.set_defaults(handler=command_notify)
 
