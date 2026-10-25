@@ -6,11 +6,15 @@ from dlt.automation import AutomationRunner
 
 
 class FakeNotifier:
-    def __init__(self):
+    def __init__(self, notification_id="fake", *, fail_first=False):
+        self.notification_id = notification_id
         self.calls = 0
+        self.fail_first = fail_first
 
     def send(self, _prediction):
         self.calls += 1
+        if self.fail_first and self.calls == 1:
+            raise RuntimeError("temporary failure")
         return {"code": 200}
 
 
@@ -48,6 +52,27 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(result["fresh"])
         self.assertFalse(result["notified"])
         self.assertEqual(notifier.calls, 0)
+
+    def test_partial_channel_failure_only_retries_failed_channel(self):
+        prediction = {"target_issue": "26122", "based_on_date": "2026-10-24", "recommendations": []}
+        wechat = FakeNotifier("pushplus:wechat")
+        qq = FakeNotifier("pushplus:qq", fail_first=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = AutomationRunner(
+                data_path=Path(tmp) / "dlt.json",
+                runtime_dir=Path(tmp) / "runtime",
+                update_func=lambda *_args, **_kwargs: [],
+                predict_func=lambda _draws: prediction,
+                notifiers=[wechat, qq],
+                load_func=lambda _path: [{"issue": "26121"}],
+            )
+            with self.assertRaises(RuntimeError):
+                runner.run(update=False, notify=True)
+            second = runner.run(update=False, notify=True)
+
+        self.assertEqual(wechat.calls, 1)
+        self.assertEqual(qq.calls, 2)
+        self.assertEqual(second["notified_channels"], ["pushplus:qq"])
 
 
 if __name__ == "__main__":

@@ -101,6 +101,16 @@ QMSG_GROUP=
 
 如已有可用的 PushPlus 配置，可将 `NOTIFY_PROVIDER` 改为 `pushplus`，并继续使用 `PUSHPLUS_*` 环境变量。
 
+PushPlus 微信和 QQ 同时发送：
+
+```dotenv
+NOTIFY_PROVIDER=pushplus
+PUSHPLUS_TOKEN=你的Token
+PUSHPLUS_CHANNELS=wechat,qq
+```
+
+每个渠道按“目标期号 + 渠道”单独记录成功状态。微信成功、QQ 失败时，调度器只重试 QQ，不会向微信重复发送。
+
 ### 3. 测试消息
 
 先查看消息内容：

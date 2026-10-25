@@ -102,6 +102,7 @@ class QmsgNotifier:
             raise NotificationConfigError("QMSG_GROUP 必须是 QQ 群号")
         self._endpoint = QMSG_ENDPOINT.format(key=key)
         self.group = group
+        self.notification_id = f"qmsg:{group or 'direct'}"
         self._opener = opener
         self.timeout = timeout
 
@@ -163,6 +164,7 @@ class PushPlusNotifier:
             raise NotificationConfigError("PUSHPLUS_CHANNEL 仅支持 wechat 或 qq")
         self._token = token
         self.channel = channel
+        self.notification_id = f"pushplus:{channel}"
         self.topic = topic.strip() if topic else None
         self.recipient = recipient.strip() if recipient else None
         self.option = option.strip() if option else None

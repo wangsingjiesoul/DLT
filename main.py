@@ -63,7 +63,7 @@ def notification_provider() -> str:
     return provider
 
 
-def build_notifier(required: bool = False) -> QmsgNotifier | PushPlusNotifier | None:
+def build_notifiers(required: bool = False) -> list[QmsgNotifier | PushPlusNotifier]:
     provider = notification_provider()
 
     if provider == "qmsg":
@@ -71,22 +71,30 @@ def build_notifier(required: bool = False) -> QmsgNotifier | PushPlusNotifier | 
         if not key:
             if required:
                 raise NotificationConfigError("请先配置 QMSG_KEY")
-            return None
-        return QmsgNotifier(key, group=os.getenv("QMSG_GROUP") or None)
+            return []
+        return [QmsgNotifier(key, group=os.getenv("QMSG_GROUP") or None)]
 
     if provider == "pushplus":
         token = os.getenv("PUSHPLUS_TOKEN", "").strip()
         if not token:
             if required:
                 raise NotificationConfigError("请先配置 PUSHPLUS_TOKEN")
-            return None
-        return PushPlusNotifier(
-            token,
-            channel=os.getenv("PUSHPLUS_CHANNEL", "wechat"),
-            topic=os.getenv("PUSHPLUS_TOPIC") or None,
-            recipient=os.getenv("PUSHPLUS_TO") or None,
-            option=os.getenv("PUSHPLUS_OPTION") or None,
-        )
+            return []
+        raw_channels = os.getenv("PUSHPLUS_CHANNELS", "").strip()
+        channels = [value.strip().lower() for value in raw_channels.split(",") if value.strip()]
+        if not channels:
+            channels = [os.getenv("PUSHPLUS_CHANNEL", "wechat").strip().lower()]
+        channels = list(dict.fromkeys(channels))
+        return [
+            PushPlusNotifier(
+                token,
+                channel=channel,
+                topic=os.getenv("PUSHPLUS_TOPIC") or None,
+                recipient=os.getenv("PUSHPLUS_TO") or None,
+                option=(os.getenv("PUSHPLUS_OPTION") or None) if channel == "qq" else None,
+            )
+            for channel in channels
+        ]
 
     raise AssertionError("unreachable")
 
@@ -95,7 +103,7 @@ def build_runner(*, notifier_required: bool = False) -> AutomationRunner:
     return AutomationRunner(
         data_path=DATA_PATH,
         runtime_dir=RUNTIME_DIR,
-        notifier=build_notifier(required=notifier_required),
+        notifiers=build_notifiers(required=notifier_required),
     )
 
 
@@ -171,10 +179,8 @@ def command_notify(args: argparse.Namespace) -> int:
         formatter = format_prediction_text if notification_provider() == "qmsg" else format_prediction_markdown
         print(formatter(prediction))
         return 0
-    notifier = build_notifier(required=True)
-    assert notifier is not None
-    result = notifier.send(prediction)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    results = {notifier.notification_id: notifier.send(prediction) for notifier in build_notifiers(required=True)}
+    print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -185,6 +191,7 @@ def command_run_once(args: argparse.Namespace) -> int:
         "target_issue": result["prediction"]["target_issue"],
         "based_on_issue": result["prediction"]["based_on_issue"],
         "notified": result["notified"],
+        "notified_channels": result["notified_channels"],
         "update": {key: value for key, value in (result["update"] or {}).items() if key != "draws"},
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
